@@ -1,0 +1,101 @@
+{
+  "info": {
+    "name": "RAG Role-Play API",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://127.0.0.1:8000" },
+    { "key": "userId", "value": "1" },
+    { "key": "characterId", "value": "2" }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{baseUrl}}/api/health"
+      }
+    },
+    {
+      "name": "Auth Register",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"account\": \"demo_user\",\n  \"password\": \"secret12\",\n  \"nickname\": \"演示用户\"\n}"
+        },
+        "url": "{{baseUrl}}/api/auth/register"
+      }
+    },
+    {
+      "name": "Auth Login",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"account\": \"demo_user\",\n  \"password\": \"secret12\"\n}"
+        },
+        "url": "{{baseUrl}}/api/auth/login"
+      }
+    },
+    {
+      "name": "List Characters",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{baseUrl}}/api/characters"
+      }
+    },
+    {
+      "name": "Chat Send",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"user_id\": {{userId}},\n  \"character_id\": {{characterId}},\n  \"question\": \"高血压饮食要注意什么？\"\n}"
+        },
+        "url": "{{baseUrl}}/api/chat"
+      }
+    },
+    {
+      "name": "Chat History",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{baseUrl}}/api/chat/history?user_id={{userId}}&character_id={{characterId}}&limit=50"
+      }
+    },
+    {
+      "name": "Knowledge Upload",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            { "key": "character_id", "type": "text", "value": "{{characterId}}" },
+            {
+              "key": "file",
+              "type": "file",
+              "src": "",
+              "description": "选择本地 .txt / .md / .pdf"
+            }
+          ]
+        },
+        "url": "{{baseUrl}}/api/knowledge/upload"
+      }
+    },
+    {
+      "name": "Knowledge List",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{baseUrl}}/api/knowledge/list?character_id={{characterId}}"
+      }
+    }
+  ]
+}

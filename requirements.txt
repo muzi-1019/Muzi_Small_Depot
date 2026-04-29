@@ -1,0 +1,17 @@
+fastapi
+uvicorn[standard]
+pydantic
+pydantic-settings
+sqlalchemy
+PyMySQL
+redis
+pymilvus
+python-jose[cryptography]
+passlib
+python-multipart
+httpx
+pypdf
+PyMuPDF
+rapidocr-onnxruntime
+Pillow
+pytest
