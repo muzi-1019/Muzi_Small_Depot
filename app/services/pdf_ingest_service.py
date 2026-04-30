@@ -159,6 +159,12 @@ class PDFIngestService:
         rows = self.search_hybrid(character_id, query, top_k=top_k)
         return [row["text"] for row in rows]
 
+    def search_with_meta(self, character_id: int, query: str, top_k: int | None = None) -> list[dict[str, object]]:
+        """在Milvus中搜索并返回带元数据的知识片段（用于参考文献展示）。
+        返回列表中的每个字典包含：source_file, chunk_index, score, text, method。
+        """
+        return self.search_hybrid(character_id, query, top_k=top_k)
+
     def has_data(self, character_id: int) -> bool:
         """检查指定角色在Milvus中是否已有向量数据（用于判断是否需要执行RAG检索）"""
         from pymilvus import Collection, connections, utility
@@ -229,7 +235,13 @@ class PDFIngestService:
         if not tokens:
             return []
         expr = f"character_id == {character_id}"
-        rows = collection.query(expr=expr, output_fields=["text", "keywords", "source_file", "chunk_index"], limit=2000)
+        existing_fields = {f.name for f in collection.schema.fields}
+        kw_output = ["text", "source_file"]
+        if "keywords" in existing_fields:
+            kw_output.append("keywords")
+        if "chunk_index" in existing_fields:
+            kw_output.append("chunk_index")
+        rows = collection.query(expr=expr, output_fields=kw_output, limit=2000)
         scored: list[dict[str, object]] = []
         for row in rows:
             text = str(row.get("text", ""))
@@ -270,7 +282,7 @@ class PDFIngestService:
             param={"metric_type": "COSINE", "params": {"nprobe": 16}},
             limit=top_k,
             expr=f"character_id == {character_id}",
-            output_fields=["text", "source_file", "chunk_index", "keywords"],
+            output_fields=[f.name for f in collection.schema.fields if f.name in ("text", "source_file", "chunk_index", "keywords")],
         )
         rows: list[dict[str, object]] = []
         for hits in results:

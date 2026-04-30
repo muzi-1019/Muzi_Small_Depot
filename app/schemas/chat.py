@@ -21,10 +21,18 @@ class ChatRequest(BaseModel):
     longitude: float | None = None          # 用户地理位置经度（由前端浏览器定位获取，可选）
 
 
+class RetrievedSource(BaseModel):
+    """检索到的知识片段：用于参考文献展示"""
+    source_file: str                        # 来源 PDF 文件名
+    chunk_index: int = 0                    # 片段编号
+    score: float = 0.0                      # 相似度得分
+    text: str                               # 片段原文
+
+
 class ChatData(BaseModel):
     """聊天响应数据：非流式回复时，AI 回答的具体内容"""
     answer: str                             # AI 的回复文本
-    retrieve_knowledge: list[str]           # 检索到的知识片段列表（用于展示参考来源）
+    retrieve_knowledge: list[RetrievedSource] = []  # 检索到的知识片段（参考文献）
     rag_used: bool = False                  # 本次回复是否使用了向量知识库检索
 
 
@@ -36,10 +44,11 @@ class ChatResponse(BaseModel):
 
 
 class HistoryItem(BaseModel):
-    """单条历史消息：包含一问一答"""
+    """单条历史消息：包含一问一答及参考文献"""
     user_message: str                       # 用户发送的消息
     ai_reply: str                           # AI 的回复
     rag_used: bool = False                  # 该回复是否使用了向量知识库检索
+    sources: list[RetrievedSource] = []     # 检索到的参考文献列表
     created_at: datetime                    # 消息创建时间
 
 

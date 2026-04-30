@@ -215,6 +215,19 @@ label { font-size: 12px; color: var(--text-secondary); }
 .skeleton.short { width:64%; }
 .toast { position: fixed; right: 24px; bottom: 24px; padding: 12px 14px; border-radius: 14px; background: var(--toast-bg); color: #fff; box-shadow: 0 10px 25px rgba(12, 24, 50, 0.25); max-width: min(80vw, 560px); width: fit-content; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; line-height: 1.5; }
 .bubble.assistant p { transition: opacity .12s ease; }
+/* ========== 参考文献面板 ========== */
+.sources-panel { margin-top: 10px; border-top: 1px solid var(--panel-border); padding-top: 8px; }
+.sources-summary { cursor: pointer; font-size: 12px; font-weight: 700; color: var(--accent); user-select: none; padding: 4px 0; display: flex; align-items: center; gap: 6px; }
+.sources-summary::before { content: "📚"; font-size: 13px; }
+.sources-summary:hover { opacity: .8; }
+.sources-list { margin: 8px 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 8px; list-style-type: decimal; }
+.source-item { font-size: 12px; line-height: 1.5; padding: 8px 10px; background: rgba(0,0,0,.03); border-radius: 10px; border: 1px solid var(--panel-border); }
+[data-theme="dark"] .source-item { background: rgba(255,255,255,.04); }
+.source-meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 4px; }
+.source-file { font-weight: 700; color: var(--accent); max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.source-chunk { font-size: 11px; color: var(--text-secondary); background: var(--panel-border); padding: 1px 6px; border-radius: 6px; }
+.source-score { font-size: 11px; color: var(--text-secondary); }
+.source-text { color: var(--text-secondary); font-size: 11.5px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
 @keyframes fadeIn { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:translateY(0); } }
 @keyframes shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
 @keyframes panelEnter { from { opacity: 0; transform: translateY(14px) scale(.985); } to { opacity: 1; transform: translateY(0) scale(1); } }

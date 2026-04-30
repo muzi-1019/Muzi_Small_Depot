@@ -76,11 +76,12 @@ class ChatService:
             conv_id = conv.id
 
         rag_used = False
+        sources: list[dict[str, object]] = []
         if self._contains_blocked_word(payload.question):
             answer = "抱歉，我无法回答这个问题。"
         else:
             memory = self.memory_service.get_recent_context(payload.user_id, payload.character_id, conv_id)
-            context = self._retrieve_context(payload.character_id, payload.question)
+            context, sources = self._retrieve_context(payload.character_id, payload.question)
             rag_used = bool(context.strip())
             realtime_ctx = ContextService.get_realtime_context(client_ip, payload.latitude, payload.longitude)
             answer = self.llm_service.generate(
@@ -91,7 +92,7 @@ class ChatService:
                 realtime_context=realtime_ctx,
             )
 
-        self.conversation_repository.add_message(conv_id, payload.question, answer, rag_used=rag_used)
+        self.conversation_repository.add_message(conv_id, payload.question, answer, rag_used=rag_used, sources=sources)
         self.conversation_repository.update_conversation(conv_id, title=conv.title or payload.question[:18], preview=payload.question[:120])
 
         self.memory_service.append_round(
@@ -106,7 +107,7 @@ class ChatService:
 
         answer = self._filter_blocked_words(answer)
 
-        return ChatResponse(data=ChatData(answer=answer, retrieve_knowledge=[], rag_used=rag_used))
+        return ChatResponse(data=ChatData(answer=answer, retrieve_knowledge=sources, rag_used=rag_used))
 
     def send_message_stream(self, payload: ChatRequest, client_ip: str | None = None) -> Generator[str, None, None]:
         """
@@ -140,14 +141,14 @@ class ChatService:
         if self._contains_blocked_word(payload.question):
             refusal = "抱歉，我无法回答这个问题。"
             yield f"data: {json.dumps({'chunk': refusal}, ensure_ascii=False)}\n\n"
-            self.conversation_repository.add_message(conv_id, payload.question, refusal)
+            self.conversation_repository.add_message(conv_id, payload.question, refusal, sources=[])
             self.conversation_repository.update_conversation(conv_id, title=conv.title or payload.question[:18], preview=payload.question[:120])
             self.memory_service.append_round(user_id=payload.user_id, character_id=payload.character_id, human=payload.question, ai=refusal, conversation_id=conv_id)
             yield "data: [DONE]\n\n"
             return
 
         memory = self.memory_service.get_recent_context(payload.user_id, payload.character_id, conv_id)
-        context = self._retrieve_context(payload.character_id, payload.question)
+        context, sources = self._retrieve_context(payload.character_id, payload.question)
         rag_used = bool(context.strip())
         realtime_ctx = ContextService.get_realtime_context(client_ip, payload.latitude, payload.longitude)
         yield f"data: {json.dumps({'rag_used': rag_used}, ensure_ascii=False)}\n\n"
@@ -168,13 +169,16 @@ class ChatService:
             refusal = "抱歉，我无法回答这个问题。"
             yield f"data: {json.dumps({'replace': refusal}, ensure_ascii=False)}\n\n"
             full_answer = refusal
+            sources = []
 
-        self.conversation_repository.add_message(conv_id, payload.question, full_answer, rag_used=rag_used)
+        self.conversation_repository.add_message(conv_id, payload.question, full_answer, rag_used=rag_used, sources=sources)
         self.conversation_repository.update_conversation(conv_id, title=conv.title or payload.question[:18], preview=payload.question[:120])
         self.memory_service.append_round(user_id=payload.user_id, character_id=payload.character_id, human=payload.question, ai=full_answer, conversation_id=conv_id)
 
         self._maybe_summarize(payload.user_id, payload.character_id, conv_id)
 
+        if sources:
+            yield f"data: {json.dumps({'sources': sources}, ensure_ascii=False)}\n\n"
         yield "data: [DONE]\n\n"
 
     def export_conversation(self, user_id: int, conversation_id: int) -> str:
@@ -202,15 +206,26 @@ class ChatService:
             raise HTTPException(status_code=404, detail="Conversation not found")
 
         rows = self.conversation_repository.list_messages(conversation_id, limit=limit)
-        data = [
-            HistoryItem(
-                user_message=m.user_message,
-                ai_reply=self._filter_blocked_words(m.ai_reply),
-                rag_used=getattr(m, 'rag_used', False),
-                created_at=m.created_at,
+        data = []
+        for m in rows:
+            sources = []
+            raw = getattr(m, 'sources_json', '') or ''
+            if raw:
+                try:
+                    parsed = json.loads(raw)
+                    if isinstance(parsed, list):
+                        sources = parsed
+                except Exception:
+                    pass
+            data.append(
+                HistoryItem(
+                    user_message=m.user_message,
+                    ai_reply=self._filter_blocked_words(m.ai_reply),
+                    rag_used=getattr(m, 'rag_used', False),
+                    sources=sources,
+                    created_at=m.created_at,
+                )
             )
-            for m in rows
-        ]
         return HistoryResponse(data=data)
 
     def list_conversations(self, user_id: int, character_id: int | None = None) -> ConversationListResponse:
@@ -293,25 +308,39 @@ class ChatService:
         except Exception:
             pass
 
-    def _retrieve_context(self, character_id: int, question: str) -> str:
+    def _retrieve_context(self, character_id: int, question: str) -> tuple[str, list[dict[str, object]]]:
         """
         RAG 检索：从 Milvus 向量库中检索与用户问题相关的知识片段。
-        先检查该角色是否有向量数据，有则搜索并返回拼接后的文本，无则返回空字符串。
+        返回带引用标记的上下文文本（如 [1] 片段1\n\n[2] 片段2）及 sources 元数据列表。
         """
         try:
             has = self.pdf_ingest_service.has_data(character_id)
             print(f"[RAG] character_id={character_id}, has_data={has}", flush=True)
             if not has:
-                return ""
-            chunks = self.pdf_ingest_service.search(character_id, question)
-            print(f"[RAG] character_id={character_id}, retrieved {len(chunks)} chunks", flush=True)
-            if chunks:
-                return "\n".join(chunks)
+                return "", []
+            rows = self.pdf_ingest_service.search_with_meta(character_id, question)
+            print(f"[RAG] character_id={character_id}, retrieved {len(rows)} chunks", flush=True)
+            if rows:
+                context_parts = []
+                for i, row in enumerate(rows, 1):
+                    text = row.get("text", "")
+                    context_parts.append(f"[{i}] {text}")
+                context_text = "\n\n".join(context_parts)
+                sources = [
+                    {
+                        "source_file": str(row.get("source_file", "")),
+                        "chunk_index": int(row.get("chunk_index", 0)),
+                        "score": round(float(row.get("hybrid_score", row.get("score", 0.0))), 4),
+                        "text": str(row.get("text", "")),
+                    }
+                    for row in rows
+                ]
+                return context_text, sources
         except Exception as e:
             import traceback
             print(f"[RAG] retrieve error: {e}", flush=True)
             traceback.print_exc()
-        return ""
+        return "", []
 
     @staticmethod
     def _blocked_pattern() -> re.Pattern | None:
