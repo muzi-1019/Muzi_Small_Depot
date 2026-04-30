@@ -72,6 +72,7 @@ class ChatMessage(Base):
     user_message: Mapped[str] = mapped_column(Text)                                        # 用户发送的消息内容
     ai_reply: Mapped[str] = mapped_column(Text)                                            # AI 的回复内容
     rag_used: Mapped[bool] = mapped_column(default=False)                                  # 这条回复是否使用了向量知识库检索（True=用了RAG, False=纯大模型）
+    sources_json: Mapped[str] = mapped_column(Text, default="")                            # 检索到的知识片段元数据（JSON数组），包含来源文件、片段编号、相似度、原文
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)            # 消息创建时间
 
 
@@ -97,6 +98,7 @@ class ArchivedChatMessage(Base):
     original_conversation_id: Mapped[int] = mapped_column(index=True)           # 原始会话ID
     user_message: Mapped[str] = mapped_column(Text)                             # 原始用户消息
     ai_reply: Mapped[str] = mapped_column(Text)                                 # 原始AI回复
+    sources_json: Mapped[str] = mapped_column(Text, default="")                 # 原始检索知识片段元数据
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)  # 原始创建时间
     archived_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)  # 归档时间
 

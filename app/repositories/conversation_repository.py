@@ -6,6 +6,7 @@
 - 删除会话时自动归档到备份表（防止数据丢失）
 """
 
+import json
 from datetime import datetime  # 日期时间类型
 
 from sqlalchemy import desc, or_, select  # desc=降序排列, or_=SQL OR 条件, select=查询构造器
@@ -85,6 +86,7 @@ class ConversationRepository:
                 original_conversation_id=conversation_id,
                 user_message=m.user_message,
                 ai_reply=m.ai_reply,
+                sources_json=m.sources_json or "",
                 created_at=m.created_at,
                 archived_at=now,
             ))
@@ -94,10 +96,11 @@ class ConversationRepository:
         self.db.commit()
         return True
 
-    def add_message(self, conversation_id: int, user_message: str, ai_reply: str, rag_used: bool = False) -> ChatMessage:
+    def add_message(self, conversation_id: int, user_message: str, ai_reply: str, rag_used: bool = False, sources: list[dict] | None = None) -> ChatMessage:
         """
         向指定会话添加一条消息（一问一答）。
         同时更新会话的预览内容和最后修改时间。
+        sources 为检索到的知识片段列表，自动序列化为 JSON 存储。
         """
         conv = self.db.get(Conversation, conversation_id)
         if conv:
@@ -108,6 +111,7 @@ class ConversationRepository:
             user_message=user_message,        # 用户发送的消息
             ai_reply=ai_reply,                # AI 的回复
             rag_used=rag_used,                # 是否使用了向量知识库检索
+            sources_json=json.dumps(sources or [], ensure_ascii=False),
         )
         self.db.add(msg)
         self.db.commit()

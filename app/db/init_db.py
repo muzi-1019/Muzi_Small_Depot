@@ -84,9 +84,31 @@ def _ensure_schema() -> None:
         msg_ddl: list[str] = []
         if "rag_used" not in msg_columns:  # 是否使用了向量检索的标记字段
             msg_ddl.append("ALTER TABLE chat_message ADD COLUMN rag_used TINYINT(1) NOT NULL DEFAULT 0")
+        if "sources_json" not in msg_columns:  # 检索知识片段元数据（JSON数组）
+            msg_ddl.append("ALTER TABLE chat_message ADD COLUMN sources_json TEXT")
         for stmt in msg_ddl:
             conn.execute(text(stmt))
         if msg_ddl:
+            conn.commit()
+
+        # ---------- 获取 archived_chat_message 表的现有字段列表 ----------
+        arch_columns = {
+            row[0]
+            for row in conn.execute(
+                text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_schema = DATABASE() AND table_name = :name"
+                ),
+                {"name": "archived_chat_message"},
+            ).all()
+        }
+        # ---------- 检查并添加 archived_chat_message 表缺失的字段 ----------
+        arch_ddl: list[str] = []
+        if "sources_json" not in arch_columns:
+            arch_ddl.append("ALTER TABLE archived_chat_message ADD COLUMN sources_json TEXT")
+        for stmt in arch_ddl:
+            conn.execute(text(stmt))
+        if arch_ddl:
             conn.commit()
 
 
