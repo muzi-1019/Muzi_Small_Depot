@@ -22,8 +22,8 @@ def main():
     """主函数：从 Milvus 获取已有知识片段，调用 LightRAGService 增量构建图谱"""
     from pymilvus import Collection, connections, utility
 
-    print(f"[INFO] 连接 Milvus: {settings.milvus_uri}")
-    connections.connect(alias="default", uri=settings.milvus_uri, db_name=settings.milvus_db)
+    print(f"[INFO] 连接 Milvus: {settings.milvus_url}")
+    connections.connect(alias="default", uri=settings.milvus_url, db_name=settings.milvus_db)
 
     collection_name = f"{settings.milvus_collection}_{CHARACTER_ID}"
     if not utility.has_collection(collection_name):

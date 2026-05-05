@@ -32,7 +32,7 @@ def build_graph(
     from app.core.config import settings
 
     try:
-        connections.connect(alias="default", uri=settings.milvus_uri, db_name=settings.milvus_db)
+        connections.connect(alias="default", uri=settings.milvus_url, db_name=settings.milvus_db)
     except Exception as e:
         return {"code": 500, "msg": f"无法连接 Milvus: {e}"}
 

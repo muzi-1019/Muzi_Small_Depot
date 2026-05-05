@@ -155,25 +155,36 @@ class ChatService:
 
         memory = self.memory_service.get_recent_context(payload.user_id, payload.character_id, conv_id)
         retrieval_query = self.llm_service.rewrite_query(payload.question, memory) if settings.query_rewrite_enabled else payload.question
+        print(f"[STREAM] rewrite_query done: {retrieval_query[:80]}", flush=True)
         if getattr(payload, 'force_no_rag', False):
             context, sources = "", []
         else:
             context, sources = self._retrieve_context(payload.character_id, retrieval_query)
         rag_used = bool(context.strip())
+        print(f"[STREAM] RAG done: rag_used={rag_used}, sources={len(sources)}, context_len={len(context)}", flush=True)
         realtime_ctx = ContextService.get_realtime_context(client_ip, payload.latitude, payload.longitude)
         yield f"data: {json.dumps({'rag_used': rag_used}, ensure_ascii=False)}\n\n"
         full_answer_parts: list[str] = []
         blocked = False
+        chunk_count = 0
 
-        for chunk in self.llm_service.generate_stream(character=character, question=payload.question, context=context, memory=memory, realtime_context=realtime_ctx):
-            full_answer_parts.append(chunk)
-            current_text = "".join(full_answer_parts)
-            if not blocked and self._contains_blocked_word(current_text):
-                blocked = True
-            if not blocked:
-                yield f"data: {json.dumps({'chunk': chunk}, ensure_ascii=False)}\n\n"
+        try:
+            for chunk in self.llm_service.generate_stream(character=character, question=payload.question, context=context, memory=memory, realtime_context=realtime_ctx):
+                chunk_count += 1
+                full_answer_parts.append(chunk)
+                current_text = "".join(full_answer_parts)
+                if not blocked and self._contains_blocked_word(current_text):
+                    blocked = True
+                if not blocked:
+                    yield f"data: {json.dumps({'chunk': chunk}, ensure_ascii=False)}\n\n"
+        except Exception as e:
+            import traceback
+            print(f"[STREAM] LLM stream error after {chunk_count} chunks: {e}", flush=True)
+            traceback.print_exc()
+            yield f"data: {json.dumps({'error': f'生成中断: {type(e).__name__}'}, ensure_ascii=False)}\n\n"
 
         full_answer = "".join(full_answer_parts)
+        print(f"[STREAM] LLM done: {chunk_count} chunks, answer_len={len(full_answer)}", flush=True)
 
         if blocked:
             refusal = "抱歉，我无法回答这个问题。"

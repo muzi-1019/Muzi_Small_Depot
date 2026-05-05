@@ -12,7 +12,7 @@
 
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-os.environ.setdefault("RAG_MILVUS_URI", "http://47.95.237.114:19530")  # 默认使用云服务器 Milvus
+os.environ.setdefault("RAG_MILVUS_URL", "http://localhost:19530")  # 默认使用本地 Milvus
 
 from pathlib import Path
 from app.services.pdf_ingest_service import PDFIngestService
@@ -29,7 +29,7 @@ print(f"Imported {count} chunks")
 
 # 验证导入结果：连接 Milvus 并查询样本数据，确认新字段已正确写入
 from pymilvus import connections, Collection
-connections.connect(uri="http://47.95.237.114:19530")
+connections.connect(uri="http://localhost:19530")
 c = Collection("character_knowledge_6")
 print("Schema fields:", [f.name for f in c.schema.fields])
 c.load()

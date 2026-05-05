@@ -127,7 +127,7 @@ def main():
     print("=" * 60)
     print(f"\n  模型: {settings.llm_model_name}")
     print(f"  Embedding: {settings.embedding_model_name}")
-    print(f"  Milvus: {settings.milvus_uri}")
+    print(f"  Milvus: {settings.milvus_url}")
     print(f"  检索模式: {settings.retrieval_mode}")
     print(f"  测试问题数: {len(TEST_QUESTIONS)}\n")
 
@@ -239,7 +239,7 @@ def main():
         f"- **测试时间**: {time.strftime('%Y-%m-%d %H:%M:%S')}",
         f"- **LLM 模型**: {settings.llm_model_name}",
         f"- **Embedding 模型**: {settings.embedding_model_name}",
-        f"- **Milvus**: {settings.milvus_uri}",
+        f"- **Milvus**: {settings.milvus_url}",
         f"- **测试问题数**: {len(TEST_QUESTIONS)}",
         "",
         "## 分阶段耗时", "",

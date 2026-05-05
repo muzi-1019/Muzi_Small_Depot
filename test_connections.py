@@ -108,14 +108,14 @@ def test_milvus():
     from pymilvus import connections, utility, Collection
 
     # 连接 Milvus
-    connections.connect(alias="__test__", uri=settings.milvus_uri, db_name=settings.milvus_db, timeout=10)
+    connections.connect(alias="__test__", uri=settings.milvus_url, db_name=settings.milvus_db, timeout=10)
 
     # 列出所有集合
     collections = utility.list_collections(using="__test__")
 
     # 检查角色知识库集合（每个角色独立集合：character_knowledge_{id}）
     prefix = settings.milvus_collection
-    detail_parts = [f"URI: {settings.milvus_uri}", f"集合数: {len(collections)}"]
+    detail_parts = [f"URI: {settings.milvus_url}", f"集合数: {len(collections)}"]
 
     char_collections = [c for c in collections if c.startswith(prefix + "_")]
     if char_collections:
@@ -219,7 +219,7 @@ def main():
     tests = [
         ("MySQL 数据库", test_mysql, f"DSN: ...@{settings.mysql_dsn.split('@')[-1] if '@' in settings.mysql_dsn else settings.mysql_dsn}"),
         ("Redis 缓存", test_redis, f"URL: {settings.redis_url}"),
-        ("Milvus 向量数据库", test_milvus, f"URI: {settings.milvus_uri}"),
+        ("Milvus 向量数据库", test_milvus, f"URI: {settings.milvus_url}"),
         ("LLM 大语言模型 API", test_llm_api, f"Provider: {settings.llm_provider} | Model: {settings.llm_model_name}"),
         ("Embedding 向量化 API", test_embedding_api, f"Model: {settings.embedding_model_name}"),
         ("FastAPI 后端服务", test_backend_api, "http://127.0.0.1:8000"),

@@ -48,7 +48,7 @@ QA_PAIRS = [
 def get_all_chunks():
     """从 Milvus 获取所有知识片段"""
     from pymilvus import Collection, connections, utility
-    connections.connect(alias="default", uri=settings.milvus_uri, db_name=settings.milvus_db)
+    connections.connect(alias="default", uri=settings.milvus_url, db_name=settings.milvus_db)
     coll_name = f"{settings.milvus_collection}_{CHARACTER_ID}"
     if not utility.has_collection(coll_name):
         return []

@@ -304,7 +304,7 @@ class PDFIngestService:
         """检查指定角色在Milvus中是否已有向量数据（每个角色独立集合）"""
         from pymilvus import Collection, connections, utility
         try:
-            connections.connect(alias="default", uri=settings.milvus_uri, db_name=settings.milvus_db)
+            connections.connect(alias="default", uri=settings.milvus_url, db_name=settings.milvus_db)
         except Exception:
             return False
         coll_name = self._collection_for(character_id)
@@ -361,7 +361,7 @@ class PDFIngestService:
             return cached
         from pymilvus import Collection, connections, utility
         try:
-            connections.connect(alias="default", uri=settings.milvus_uri, db_name=settings.milvus_db)
+            connections.connect(alias="default", uri=settings.milvus_url, db_name=settings.milvus_db)
         except Exception:
             return {}
         coll_name = self._collection_for(character_id)
@@ -454,7 +454,7 @@ class PDFIngestService:
         if top_k is None:
             top_k = settings.retrieval_top_k
         try:
-            connections.connect(alias="default", uri=settings.milvus_uri, db_name=settings.milvus_db)
+            connections.connect(alias="default", uri=settings.milvus_url, db_name=settings.milvus_db)
         except Exception:
             return []
         coll_name = self._collection_for(character_id)
@@ -555,8 +555,8 @@ class PDFIngestService:
                     vec = data["data"][0]["embedding"][:settings.milvus_dim]
                     self._cache_embed_result(cache_key, vec)
                     return vec
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("Embedding API failed, falling back to SHA256: %s", e)
         digest = hashlib.sha256(text.encode("utf-8")).digest()
         vector: list[float] = []
         for i in range(settings.milvus_dim):
@@ -574,7 +574,7 @@ class PDFIngestService:
         """将向量数据批量写入Milvus（每个角色独立集合，如果集合不存在或维度不匹配会自动创建/重建）"""
         from pymilvus import Collection, CollectionSchema, DataType, FieldSchema, connections, utility
 
-        connections.connect(alias="default", uri=settings.milvus_uri, db_name=settings.milvus_db)
+        connections.connect(alias="default", uri=settings.milvus_url, db_name=settings.milvus_db)
         coll_name = self._collection_for(character_id)
         need_create = False
         if utility.has_collection(coll_name):
@@ -600,7 +600,9 @@ class PDFIngestService:
             collection = Collection(name=coll_name, schema=schema)
         else:
             collection = Collection(coll_name)
-        collection.create_index(field_name="vector")
+        if need_create:
+            index_params = {"metric_type": "COSINE", "index_type": "IVF_FLAT", "params": {"nlist": 128}}
+            collection.create_index(field_name="vector", index_params=index_params)
         collection.load()
         columns = [
             [row["source_file"] for row in rows],

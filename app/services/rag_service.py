@@ -51,7 +51,7 @@ class RAGService:
         """在 Milvus 中执行向量相似度搜索"""
         from pymilvus import Collection, connections, utility
 
-        connections.connect(alias="default", uri=settings.milvus_uri, db_name=settings.milvus_db)  # 连接 Milvus
+        connections.connect(alias="default", uri=settings.milvus_url, db_name=settings.milvus_db)  # 连接 Milvus
         name = f"{settings.milvus_collection}_{character_id}"  # 每个角色独立集合
         if not utility.has_collection(name):  # 集合不存在则返回空
             return []
@@ -59,7 +59,7 @@ class RAGService:
         col = Collection(name)
         col.load()  # 加载集合到内存
         query_vec = self._encode_question(question)  # 将问题转为向量
-        search_params = {"metric_type": "IP", "params": {"nprobe": 16}}  # 搜索参数：内积相似度
+        search_params = {"metric_type": "COSINE", "params": {"nprobe": 16}}  # 搜索参数：余弦相似度
         results = col.search(
             data=[query_vec],                                          # 查询向量
             anns_field="vector",                                       # 搜索的向量字段名
@@ -77,18 +77,28 @@ class RAGService:
 
     def _encode_question(self, question: str) -> list[float]:
         """
-        将用户问题编码为向量（占位实现，使用 SHA256 哈希生成伪向量）。
-        生产环境建议替换为与入库一致的 Embedding 服务。
+        将用户问题编码为向量：优先调用 Embedding API，失败时退化为 SHA256 伪向量。
         """
         import hashlib
+        import httpx
 
+        base_url = (settings.openai_api_base or "").rstrip("/")
+        api_key = settings.openai_api_key or ""
+        if base_url and api_key:
+            try:
+                url = f"{base_url}/embeddings"
+                headers = {"Authorization": f"Bearer {api_key}"}
+                payload = {"model": settings.embedding_model_name, "input": question[:2000]}
+                with httpx.Client(timeout=15.0, trust_env=False) as client:
+                    resp = client.post(url, headers=headers, json=payload)
+                    resp.raise_for_status()
+                    data = resp.json()
+                return data["data"][0]["embedding"][:settings.milvus_dim]
+            except Exception:
+                pass
         dim = settings.milvus_dim
-        digest = hashlib.sha256(question.encode("utf-8")).digest()  # 计算问题的 SHA256 哈希
-        vec = []
-        for i in range(dim):
-            byte = digest[i % len(digest)]
-            vec.append((byte / 255.0) * 2 - 1)  # 将字节值映射到 [-1, 1] 范围
-        return vec
+        digest = hashlib.sha256(question.encode("utf-8")).digest()
+        return [(digest[i % len(digest)] / 255.0) * 2 - 1 for i in range(dim)]
 
     @staticmethod
     def _deduplicate(chunks: Iterable[RetrievedChunk]) -> list[RetrievedChunk]:

@@ -17,8 +17,8 @@ CHARACTER_ID = int(sys.argv[1]) if len(sys.argv) > 1 else 6
 def main():
     from pymilvus import Collection, connections, utility
 
-    print(f"[INFO] 连接 Milvus: {settings.milvus_uri}")
-    connections.connect(alias="default", uri=settings.milvus_uri, db_name=settings.milvus_db)
+    print(f"[INFO] 连接 Milvus: {settings.milvus_url}")
+    connections.connect(alias="default", uri=settings.milvus_url, db_name=settings.milvus_db)
 
     collection_name = f"{settings.milvus_collection}_{CHARACTER_ID}"
     if not utility.has_collection(collection_name):

@@ -19,13 +19,13 @@ class Settings(BaseSettings):
     app_debug: bool = True                  # 是否开启调试模式，开启后报错信息更详细
 
     # ==================== 数据库连接地址 ====================
-    mysql_dsn: str = "mysql+pymysql://root:root@localhost:3306/rag_roleplay"  # MySQL 数据库连接字符串（用户名:密码@地址:端口/库名）
+    mysql_dsn: str = "mysql+pymysql://root:root@localhost:3306/mysqla"  # MySQL 数据库连接字符串（用户名:密码@地址:端口/库名）
     redis_url: str = "redis://localhost:6379/0"                                # Redis 缓存数据库地址，用于存储短期对话记忆
-    milvus_uri: str = "http://192.168.35.187:19530"                            # Milvus 向量数据库的访问地址，用于存储和检索 PDF 知识的向量
+    milvus_url: str = "http://localhost:19530"                                    # Milvus 向量数据库的访问地址（本地和云服务器均用 localhost）
     milvus_db: str = "default"                                                 # Milvus 中使用的数据库名
     milvus_collection: str = "character_knowledge"                             # Milvus 集合名前缀（每个角色独立集合：character_knowledge_{id}）
     milvus_enabled: bool = True                                                # 是否启用 Milvus 向量检索功能
-    milvus_dim: int = 768                                                      # 向量维度，必须与 embedding 模型输出的维度一致（如 bge-large-zh 输出 1024 维）
+    milvus_dim: int = 1024                                                     # 向量维度，必须与 embedding 模型输出的维度一致（bge-large-zh-v1.5 输出 1024 维）
 
     # ==================== 大模型 / AI 配置 ====================
     llm_provider: str = "mock"                                      # 大模型提供商：mock（模拟回复）/ siliconflow（硅基流动云端 API）/ openai 等
