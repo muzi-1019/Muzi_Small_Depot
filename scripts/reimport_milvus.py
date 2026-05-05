@@ -30,11 +30,17 @@ print(f"Imported {count} chunks")
 # 验证导入结果：连接 Milvus 并查询样本数据，确认新字段已正确写入
 from pymilvus import connections, Collection
 connections.connect(uri="http://47.95.237.114:19530")
-c = Collection("character_knowledge")
+c = Collection("character_knowledge_6")
 print("Schema fields:", [f.name for f in c.schema.fields])
 c.load()
-sample = c.query(expr="character_id == 6", output_fields=["chunk_index", "keywords", "source_file"], limit=5)
+sample = c.query(expr="", output_fields=["chunk_index", "keywords", "source_file"], limit=5)
 for r in sample:
     ci = r.get("chunk_index", "?")
     kw = r.get("keywords", "")[:80]
     print(f"  chunk_index={ci}  keywords={kw}")
+# from pymilvus import connections, utility
+#
+# connections.connect(uri="http://192.168.35.187:19530")
+# if utility.has_collection("character_knowledge"):
+#     utility.drop_collection("character_knowledge")
+#     print("旧集合已删除")

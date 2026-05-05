@@ -49,7 +49,12 @@ class PDFIngestService:
     """PDF 解析与向量入库服务：负责将 PDF 文件转化为可检索的向量知识"""
 
     def __init__(self) -> None:
-        self.collection_name = settings.milvus_collection  # Milvus 中的集合名称
+        self.collection_prefix = settings.milvus_collection  # Milvus 集合名前缀
+
+    @staticmethod
+    def _collection_for(character_id: int) -> str:
+        """根据角色ID生成独立的 Milvus 集合名（每个角色一个集合，完全隔离）"""
+        return f"{settings.milvus_collection}_{character_id}"
 
     def ingest_all(self) -> dict[str, int]:
         """批量入库：根据预定义的角色-PDF映射关系，将所有PDF文件解析并写入向量库"""
@@ -70,7 +75,7 @@ class PDFIngestService:
         if not chunks:
             return 0
         rows = [self._build_row(character_id, pdf_path, chunk, chunk_index) for chunk_index, chunk in enumerate(chunks)]
-        self._insert_into_milvus(rows)
+        self._insert_into_milvus(rows, character_id)
         return len(rows)
 
     def _role_pdf_mapping(self) -> dict[int, Path]:
@@ -261,10 +266,9 @@ class PDFIngestService:
         return [c for c in chunks if c]
 
     def _build_row(self, character_id: int, pdf_path: Path, chunk_text: str, chunk_index: int = 0) -> dict[str, object]:
-        """为单个文本片段构建完整的数据行（包含角色ID、来源文件、文本、向量、哈希指纹）"""
+        """为单个文本片段构建完整的数据行（来源文件、文本、向量、哈希指纹，角色通过独立集合隔离）"""
         keywords = self._extract_keywords(chunk_text)
         return {
-            "character_id": character_id,
             "source_file": pdf_path.name,
             "chunk_index": chunk_index,
             "text": chunk_text,
@@ -297,18 +301,18 @@ class PDFIngestService:
         return self.search_dispatch(character_id, query, top_k=top_k, mode=mode)
 
     def has_data(self, character_id: int) -> bool:
-        """检查指定角色在Milvus中是否已有向量数据（用于判断是否需要执行RAG检索）"""
+        """检查指定角色在Milvus中是否已有向量数据（每个角色独立集合）"""
         from pymilvus import Collection, connections, utility
         try:
             connections.connect(alias="default", uri=settings.milvus_uri, db_name=settings.milvus_db)
         except Exception:
             return False
-        if not utility.has_collection(self.collection_name):
+        coll_name = self._collection_for(character_id)
+        if not utility.has_collection(coll_name):
             return False
-        collection = Collection(self.collection_name)
+        collection = Collection(coll_name)
         collection.load()
-        res = collection.query(expr=f"character_id == {character_id}", output_fields=["character_id"], limit=1)
-        return len(res) > 0
+        return collection.num_entities > 0
 
     @staticmethod
     @lru_cache(maxsize=1)
@@ -360,9 +364,10 @@ class PDFIngestService:
             connections.connect(alias="default", uri=settings.milvus_uri, db_name=settings.milvus_db)
         except Exception:
             return {}
-        if not utility.has_collection(self.collection_name):
+        coll_name = self._collection_for(character_id)
+        if not utility.has_collection(coll_name):
             return {}
-        collection = Collection(self.collection_name)
+        collection = Collection(coll_name)
         collection.load()
         existing_fields = {f.name for f in collection.schema.fields}
         kw_output = ["text", "source_file"]
@@ -370,7 +375,7 @@ class PDFIngestService:
             kw_output.append("keywords")
         if "chunk_index" in existing_fields:
             kw_output.append("chunk_index")
-        rows = collection.query(expr=f"character_id == {character_id}", output_fields=kw_output, limit=2000)
+        rows = collection.query(expr="", output_fields=kw_output, limit=2000)
         if not rows:
             return {}
         doc_tokens_list = []
@@ -444,7 +449,7 @@ class PDFIngestService:
         return scored[:top_k]
 
     def search_vector(self, character_id: int, query: str, top_k: int | None = None) -> list[dict[str, object]]:
-        """向量检索：从Milvus中搜索语义最相关的文本片段。"""
+        """向量检索：从Milvus中搜索语义最相关的文本片段（每个角色独立集合）。"""
         from pymilvus import Collection, connections, utility
         if top_k is None:
             top_k = settings.retrieval_top_k
@@ -452,9 +457,10 @@ class PDFIngestService:
             connections.connect(alias="default", uri=settings.milvus_uri, db_name=settings.milvus_db)
         except Exception:
             return []
-        if not utility.has_collection(self.collection_name):
+        coll_name = self._collection_for(character_id)
+        if not utility.has_collection(coll_name):
             return []
-        collection = Collection(self.collection_name)
+        collection = Collection(coll_name)
         collection.load()
         query_vector = self._embed(query)
         results = collection.search(
@@ -462,7 +468,6 @@ class PDFIngestService:
             anns_field="vector",
             param={"metric_type": "COSINE", "params": {"nprobe": 16}},
             limit=top_k,
-            expr=f"character_id == {character_id}",
             output_fields=[f.name for f in collection.schema.fields if f.name in ("text", "source_file", "chunk_index", "keywords")],
         )
         rows: list[dict[str, object]] = []
@@ -565,17 +570,18 @@ class PDFIngestService:
         if len(_embed_cache) > _EMBED_CACHE_MAX:
             _embed_cache.popitem(last=False)
 
-    def _insert_into_milvus(self, rows: list[dict[str, object]]) -> None:
-        """将向量数据批量写入Milvus（如果集合不存在或维度不匹配会自动创建/重建）"""
+    def _insert_into_milvus(self, rows: list[dict[str, object]], character_id: int) -> None:
+        """将向量数据批量写入Milvus（每个角色独立集合，如果集合不存在或维度不匹配会自动创建/重建）"""
         from pymilvus import Collection, CollectionSchema, DataType, FieldSchema, connections, utility
 
         connections.connect(alias="default", uri=settings.milvus_uri, db_name=settings.milvus_db)
+        coll_name = self._collection_for(character_id)
         need_create = False
-        if utility.has_collection(self.collection_name):
-            existing = Collection(self.collection_name)
+        if utility.has_collection(coll_name):
+            existing = Collection(coll_name)
             for f in existing.schema.fields:
                 if f.name == "vector" and f.params.get("dim") != settings.milvus_dim:
-                    utility.drop_collection(self.collection_name)
+                    utility.drop_collection(coll_name)
                     need_create = True
                     break
         else:
@@ -583,7 +589,6 @@ class PDFIngestService:
         if need_create:
             fields = [
                 FieldSchema(name="id", dtype=DataType.INT64, is_primary=True, auto_id=True),
-                FieldSchema(name="character_id", dtype=DataType.INT64),
                 FieldSchema(name="source_file", dtype=DataType.VARCHAR, max_length=255),
                 FieldSchema(name="chunk_index", dtype=DataType.INT64),
                 FieldSchema(name="chunk_hash", dtype=DataType.VARCHAR, max_length=64),
@@ -591,14 +596,13 @@ class PDFIngestService:
                 FieldSchema(name="keywords", dtype=DataType.VARCHAR, max_length=4096),
                 FieldSchema(name="vector", dtype=DataType.FLOAT_VECTOR, dim=settings.milvus_dim),
             ]
-            schema = CollectionSchema(fields, description="Role PDF knowledge base")
-            collection = Collection(name=self.collection_name, schema=schema)
+            schema = CollectionSchema(fields, description=f"Knowledge base for character {character_id}")
+            collection = Collection(name=coll_name, schema=schema)
         else:
-            collection = Collection(self.collection_name)
-        collection.create_index(field_name="vector")  # 关键修复
+            collection = Collection(coll_name)
+        collection.create_index(field_name="vector")
         collection.load()
         columns = [
-            [row["character_id"] for row in rows],
             [row["source_file"] for row in rows],
             [row.get("chunk_index", 0) for row in rows],
             [row["chunk_hash"] for row in rows],

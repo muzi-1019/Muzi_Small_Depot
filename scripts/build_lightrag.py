@@ -25,7 +25,7 @@ def main():
     print(f"[INFO] 连接 Milvus: {settings.milvus_uri}")
     connections.connect(alias="default", uri=settings.milvus_uri, db_name=settings.milvus_db)
 
-    collection_name = settings.milvus_collection
+    collection_name = f"{settings.milvus_collection}_{CHARACTER_ID}"
     if not utility.has_collection(collection_name):
         print(f"[ERROR] 集合 {collection_name} 不存在")
         sys.exit(1)
@@ -33,7 +33,7 @@ def main():
     collection = Collection(collection_name)
     collection.load()
     rows = collection.query(
-        expr=f"character_id == {CHARACTER_ID}",
+        expr="",
         output_fields=["text"],
         limit=2000,
     )

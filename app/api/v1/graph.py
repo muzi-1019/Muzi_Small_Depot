@@ -36,14 +36,14 @@ def build_graph(
     except Exception as e:
         return {"code": 500, "msg": f"无法连接 Milvus: {e}"}
 
-    collection_name = settings.milvus_collection
+    collection_name = f"{settings.milvus_collection}_{character_id}"
     if not utility.has_collection(collection_name):
-        return {"code": 404, "msg": "Milvus 中没有知识库数据"}
+        return {"code": 404, "msg": f"角色 {character_id} 没有知识库数据（集合 {collection_name} 不存在）"}
 
     collection = Collection(collection_name)
     collection.load()
     rows = collection.query(
-        expr=f"character_id == {character_id}",
+        expr="",
         output_fields=["text"],
         limit=2000,
     )

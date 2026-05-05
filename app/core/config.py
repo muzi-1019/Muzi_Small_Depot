@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"                                # Redis 缓存数据库地址，用于存储短期对话记忆
     milvus_uri: str = "http://192.168.35.187:19530"                            # Milvus 向量数据库的访问地址，用于存储和检索 PDF 知识的向量
     milvus_db: str = "default"                                                 # Milvus 中使用的数据库名
-    milvus_collection: str = "character_knowledge"                             # Milvus 中存储向量的集合名（类似 MySQL 的表名）
+    milvus_collection: str = "character_knowledge"                             # Milvus 集合名前缀（每个角色独立集合：character_knowledge_{id}）
     milvus_enabled: bool = True                                                # 是否启用 Milvus 向量检索功能
     milvus_dim: int = 768                                                      # 向量维度，必须与 embedding 模型输出的维度一致（如 bge-large-zh 输出 1024 维）
 

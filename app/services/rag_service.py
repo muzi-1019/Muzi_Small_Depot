@@ -31,7 +31,7 @@ class RetrievedChunk:
 class RAGService:
     """
     RAG 检索服务：从 Milvus 检索与 PDF 切分后的文本块，并返回适合 LLM 直接使用的上下文。
-    约定：Milvus collection 中至少包含字段：character_id, text, vector。
+    约定：每个角色独立 Milvus collection（character_knowledge_{id}），包含字段：text, vector。
     """
 
     def retrieve(self, character_id: int, question: str, top_k: int = 5) -> list[str]:
@@ -52,7 +52,7 @@ class RAGService:
         from pymilvus import Collection, connections, utility
 
         connections.connect(alias="default", uri=settings.milvus_uri, db_name=settings.milvus_db)  # 连接 Milvus
-        name = settings.milvus_collection
+        name = f"{settings.milvus_collection}_{character_id}"  # 每个角色独立集合
         if not utility.has_collection(name):  # 集合不存在则返回空
             return []
 
@@ -65,7 +65,6 @@ class RAGService:
             anns_field="vector",                                       # 搜索的向量字段名
             param=search_params,                                       # 搜索参数
             limit=max(top_k, settings.rerank_top_k),                   # 返回条数
-            expr=f"character_id == {character_id}",                    # 过滤条件：只搜索该角色的知识
             output_fields=["text"],                                    # 同时返回文本字段
         )
         chunks: list[RetrievedChunk] = []
