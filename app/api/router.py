@@ -10,7 +10,7 @@
 
 from fastapi import APIRouter  # FastAPI 的路由器类
 
-from app.api.v1 import admin, auth, characters, chat, health, knowledge  # 导入各个 API 模块
+from app.api.v1 import admin, auth, characters, chat, graph, health, knowledge  # 导入各个 API 模块
 
 
 def _mount_common_routes(router: APIRouter) -> None:
@@ -21,6 +21,7 @@ def _mount_common_routes(router: APIRouter) -> None:
     router.include_router(chat.router, prefix="/chat", tags=["chat"])  # 聊天：/chat/send, /chat/stream 等
     router.include_router(knowledge.router, prefix="/knowledge", tags=["knowledge"])  # 知识库：/knowledge/upload
     router.include_router(admin.router, prefix="/admin", tags=["admin"])  # 管理后台：/admin/stats
+    router.include_router(graph.router, prefix="/graph", tags=["graph"])  # 知识图谱：/graph/build, /graph/vis
 
 
 # 创建总路由器

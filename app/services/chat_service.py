@@ -29,6 +29,7 @@ from app.schemas.chat import ChatData, ChatRequest, ChatResponse, ConversationIt
 from app.services.context_service import ContextService                    # 实时上下文服务（时间/地点/天气）
 from app.services.llm_service import LLMService                          # 大模型调用服务
 from app.services.memory_service import MemoryService                    # 对话记忆服务
+from app.services.graph_service import KnowledgeGraphService            # 知识图谱服务
 from app.services.pdf_ingest_service import PDFIngestService             # PDF 向量检索服务
 
 
@@ -48,6 +49,7 @@ class ChatService:
         self.memory_service = memory_service
         self.llm_service = LLMService()              # 大模型调用服务
         self.pdf_ingest_service = PDFIngestService()  # PDF 向量检索服务
+        self.graph_service = KnowledgeGraphService()  # 知识图谱服务
 
     def send_message(self, payload: ChatRequest, client_ip: str | None = None) -> ChatResponse:
         """
@@ -81,7 +83,11 @@ class ChatService:
             answer = "抱歉，我无法回答这个问题。"
         else:
             memory = self.memory_service.get_recent_context(payload.user_id, payload.character_id, conv_id)
-            context, sources = self._retrieve_context(payload.character_id, payload.question)
+            retrieval_query = self.llm_service.rewrite_query(payload.question, memory) if settings.query_rewrite_enabled else payload.question
+            if getattr(payload, 'force_no_rag', False):
+                context, sources = "", []
+            else:
+                context, sources = self._retrieve_context(payload.character_id, retrieval_query)
             rag_used = bool(context.strip())
             realtime_ctx = ContextService.get_realtime_context(client_ip, payload.latitude, payload.longitude)
             answer = self.llm_service.generate(
@@ -148,7 +154,11 @@ class ChatService:
             return
 
         memory = self.memory_service.get_recent_context(payload.user_id, payload.character_id, conv_id)
-        context, sources = self._retrieve_context(payload.character_id, payload.question)
+        retrieval_query = self.llm_service.rewrite_query(payload.question, memory) if settings.query_rewrite_enabled else payload.question
+        if getattr(payload, 'force_no_rag', False):
+            context, sources = "", []
+        else:
+            context, sources = self._retrieve_context(payload.character_id, retrieval_query)
         rag_used = bool(context.strip())
         realtime_ctx = ContextService.get_realtime_context(client_ip, payload.latitude, payload.longitude)
         yield f"data: {json.dumps({'rag_used': rag_used}, ensure_ascii=False)}\n\n"
@@ -335,6 +345,10 @@ class ChatService:
                     }
                     for row in rows
                 ]
+                # Graph RAG 增强：如果该角色有知识图谱，追加图检索结果
+                graph_ctx = self.graph_service.graph_context(character_id, question)
+                if graph_ctx:
+                    context_text = context_text + "\n\n" + graph_ctx
                 return context_text, sources
         except Exception as e:
             import traceback

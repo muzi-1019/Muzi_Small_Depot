@@ -171,6 +171,49 @@ class LLMService:
             return ""
 
     @staticmethod
+    def rewrite_query(question: str, memory: str) -> str:
+        """多轮对话指代消解：结合对话历史，将用户的模糊/简短问题改写为独立完整的检索查询。
+        例如：用户问"他的营收呢？" → 改写为"武汉兴图新科电子股份有限公司的营业收入是多少？"
+        """
+        if not memory or not memory.strip():
+            return question
+        provider = (settings.llm_provider or "mock").lower()
+        if provider not in {"openai", "vllm", "sglang", "siliconflow", "silicon_flow", "silicon-flow"}:
+            return question
+        base_url = (settings.openai_api_base or "").rstrip("/")
+        if not base_url:
+            return question
+        url = f"{base_url}/chat/completions"
+        headers = {"Authorization": f"Bearer {settings.openai_api_key}"}
+        payload = {
+            "model": settings.llm_model_name,
+            "messages": [
+                {"role": "system", "content": (
+                    "你是一个 Query Rewriting 助手。根据对话历史，将用户最新的问题改写为一个独立、完整、适合检索的查询。\n"
+                    "规则：\n"
+                    "1. 解析指代词（他/她/它/这个公司/该产品等）替换为具体实体名称\n"
+                    "2. 补全省略的主语或上下文\n"
+                    "3. 如果问题已经足够清晰，直接返回原问题\n"
+                    "4. 只返回改写后的问题，不要解释"
+                )},
+                {"role": "user", "content": f"对话历史：\n{memory[-1500:]}\n\n用户最新问题：{question}\n\n改写后的检索查询："},
+            ],
+            "temperature": 0.1,
+            "max_tokens": 150,
+        }
+        try:
+            with httpx.Client(timeout=10.0, trust_env=False) as client:
+                resp = client.post(url, headers=headers, json=payload)
+                resp.raise_for_status()
+                data = resp.json()
+            rewritten = data["choices"][0]["message"]["content"].strip()
+            if rewritten and len(rewritten) < 500:
+                return rewritten
+        except Exception:
+            pass
+        return question
+
+    @staticmethod
     def _openai_compatible_chat(
         character: CharacterOut,
         question: str,

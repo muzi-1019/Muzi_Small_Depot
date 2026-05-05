@@ -19,6 +19,7 @@ class ChatRequest(BaseModel):
     conversation_id: int | None = None      # 所属会话ID（如果为空则自动创建新会话）
     latitude: float | None = None           # 用户地理位置纬度（由前端浏览器定位获取，可选）
     longitude: float | None = None          # 用户地理位置经度（由前端浏览器定位获取，可选）
+    force_no_rag: bool = False              # 强制禁用 RAG 检索（用于 RAG vs 纯LLM 对比实验）
 
 
 class RetrievedSource(BaseModel):

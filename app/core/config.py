@@ -45,6 +45,10 @@ class Settings(BaseSettings):
     auto_summary_threshold: int = 10           # 自动生成对话摘要的触发阈值（每累积多少轮对话就自动总结一次）
     retrieval_top_k: int = 8                   # 向量检索时返回最相关的前 K 个文档片段
     rerank_top_k: int = 5                      # 重排序后保留的前 K 个最终结果
+    hybrid_vector_weight: float = 0.6          # 混合检索中向量检索的权重（0~1，与关键词权重互补）
+    hybrid_keyword_weight: float = 0.4         # 混合检索中关键词检索的权重
+    query_rewrite_enabled: bool = True         # 是否启用多轮对话 Query Rewriting（指代消解）
+    retrieval_mode: str = "hybrid"             # 检索模式：vector / keyword / hybrid
     max_concurrent_roles_per_user: int = 20    # 每个用户最多同时与多少个角色进行对话
     active_role_idle_seconds: int = 3600       # 角色会话空闲超时时间（秒），超过此时间视为不活跃，可被新角色替换
 

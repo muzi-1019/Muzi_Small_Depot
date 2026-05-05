@@ -228,6 +228,22 @@ label { font-size: 12px; color: var(--text-secondary); }
 .source-chunk { font-size: 11px; color: var(--text-secondary); background: var(--panel-border); padding: 1px 6px; border-radius: 6px; }
 .source-score { font-size: 11px; color: var(--text-secondary); }
 .source-text { color: var(--text-secondary); font-size: 11.5px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
+/* ========== 对比按钮 ========== */
+.compare-btn { padding: 8px 14px; border-radius: 12px; font-size: 13px; font-weight: 700; cursor: pointer; border: 2px solid var(--accent); background: transparent; color: var(--accent); transition: all .2s; flex-shrink: 0; }
+.compare-btn:hover:not(:disabled) { background: var(--accent); color: #fff; }
+.compare-btn:disabled { opacity: .4; cursor: not-allowed; }
+
+/* ========== 对比面板 ========== */
+.compare-bubble { max-width: 100% !important; width: 100%; }
+.compare-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 8px; }
+.compare-col { background: rgba(0,0,0,.02); border: 1px solid var(--panel-border); border-radius: 12px; padding: 12px 14px; min-height: 60px; }
+[data-theme="dark"] .compare-col { background: rgba(255,255,255,.03); }
+.compare-label { font-size: 12px; font-weight: 700; margin-bottom: 8px; padding: 3px 10px; border-radius: 8px; display: inline-block; }
+.rag-label { background: rgba(47,102,255,.12); color: var(--accent); }
+.llm-label { background: rgba(255,152,0,.12); color: #f59e0b; }
+.compare-col p { font-size: 13px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; }
+@media (max-width: 768px) { .compare-grid { grid-template-columns: 1fr; } }
+
 @keyframes fadeIn { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:translateY(0); } }
 @keyframes shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
 @keyframes panelEnter { from { opacity: 0; transform: translateY(14px) scale(.985); } to { opacity: 1; transform: translateY(0) scale(1); } }

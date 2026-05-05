@@ -1,0 +1,114 @@
+# ============================
+# RAG Role-Play System — Docker Compose 编排
+# 服务：MySQL + Redis + Milvus + 后端 + 前端(Nginx)
+# 用法：docker-compose up -d --build
+# ============================
+
+version: "3.9"
+
+services:
+  # ========== MySQL ==========
+  mysql:
+    image: mysql:8.0
+    container_name: rag-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
+      MYSQL_DATABASE: rag_roleplay
+      MYSQL_CHARSET: utf8mb4
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      retries: 5
+
+  # ========== Redis ==========
+  redis:
+    image: redis:7-alpine
+    container_name: rag-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      retries: 5
+
+  # ========== Milvus Standalone ==========
+  milvus:
+    image: milvusdb/milvus:v2.4.0
+    container_name: rag-milvus
+    restart: unless-stopped
+    environment:
+      ETCD_USE_EMBED: "true"
+      ETCD_DATA_DIR: /var/lib/milvus/etcd
+      COMMON_STORAGETYPE: local
+    ports:
+      - "19530:19530"
+      - "9091:9091"
+    volumes:
+      - milvus_data:/var/lib/milvus
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      interval: 15s
+      retries: 5
+
+  # ========== 后端 API ==========
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rag-backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      RAG_APP_ENV: prod
+      RAG_APP_DEBUG: "false"
+      RAG_MYSQL_DSN: mysql+pymysql://root:${MYSQL_ROOT_PASSWORD:-root}@mysql:3306/rag_roleplay
+      RAG_REDIS_URL: redis://redis:6379/0
+      RAG_MILVUS_URI: http://milvus:19530
+      RAG_MILVUS_ENABLED: "true"
+      RAG_MILVUS_COLLECTION: character_knowledge
+      RAG_LLM_PROVIDER: ${RAG_LLM_PROVIDER:-siliconflow}
+      RAG_LLM_MODEL_NAME: ${RAG_LLM_MODEL_NAME:-deepseek-ai/DeepSeek-V3}
+      RAG_OPENAI_API_BASE: ${RAG_OPENAI_API_BASE:-https://api.siliconflow.cn/v1}
+      RAG_OPENAI_API_KEY: ${RAG_OPENAI_API_KEY:-}
+      RAG_EMBEDDING_MODEL_NAME: ${RAG_EMBEDDING_MODEL_NAME:-BAAI/bge-large-zh-v1.5}
+      RAG_JWT_SECRET: ${RAG_JWT_SECRET:-change-me-in-production}
+      RAG_RETRIEVAL_MODE: ${RAG_RETRIEVAL_MODE:-hybrid}
+      RAG_QUERY_REWRITE_ENABLED: "true"
+    volumes:
+      - ./uploads:/app/uploads          # 上传文件持久化
+      - ./data/graphs:/app/data/graphs  # 知识图谱数据持久化
+      - ./log:/app/log                  # 日志持久化
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      milvus:
+        condition: service_healthy
+
+  # ========== 前端 Nginx ==========
+  frontend:
+    image: nginx:alpine
+    container_name: rag-frontend
+    restart: unless-stopped
+    ports:
+      - "5173:80"
+    volumes:
+      - ./frontend/dist:/usr/share/nginx/html:ro
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - backend
+
+volumes:
+  mysql_data:
+  redis_data:
+  milvus_data:

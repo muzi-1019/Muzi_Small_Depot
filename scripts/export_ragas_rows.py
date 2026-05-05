@@ -15,6 +15,7 @@ import httpx
 
 
 def main() -> None:
+    """主函数：解析命令行参数，逐题调用聊天 API，将问答对导出为 RAGAS 评估用的 JSONL 文件"""
     parser = argparse.ArgumentParser()
     parser.add_argument("--base-url", default="http://127.0.0.1:8000")
     parser.add_argument("--user-id", type=int, required=True)
