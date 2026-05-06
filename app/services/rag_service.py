@@ -15,10 +15,13 @@
 
 from __future__ import annotations  # 允许字符串形式的类型注解
 
+import logging                       # 日志
 from dataclasses import dataclass   # 数据类装饰器
 from typing import Iterable         # 可迭代类型注解
 
 from app.core.config import settings  # 全局配置
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -39,41 +42,49 @@ class RAGService:
         检索入口：根据角色ID和用户问题，从向量库中检索最相关的知识片段。
         返回格式化后的文本列表，可直接拼接作为大模型的上下文。
         """
+        logger.info("RAG retrieve start: character_id=%d, question=%s, top_k=%d", character_id, question[:60], top_k)
         try:
-            chunks = self._milvus_search(character_id, question, top_k)  # 执行向量搜索
+            chunks = self._milvus_search(character_id, question, top_k)
             if chunks:
-                return [self._format_chunk(i + 1, c) for i, c in enumerate(chunks)]  # 格式化结果
-        except Exception:
-            pass
-        return []  # 检索失败返回空列表
+                logger.info("RAG retrieve done: found=%d chunks", len(chunks))
+                return [self._format_chunk(i + 1, c) for i, c in enumerate(chunks)]
+            logger.warning("RAG retrieve empty: no chunks found")
+        except Exception as e:
+            logger.error("RAG retrieve failed: %s", e, exc_info=True)
+        return []
 
     def _milvus_search(self, character_id: int, question: str, top_k: int) -> list[RetrievedChunk]:
         """在 Milvus 中执行向量相似度搜索"""
         from pymilvus import Collection, connections, utility
 
-        connections.connect(alias="default", uri=settings.milvus_url, db_name=settings.milvus_db)  # 连接 Milvus
-        name = f"{settings.milvus_collection}_{character_id}"  # 每个角色独立集合
-        if not utility.has_collection(name):  # 集合不存在则返回空
+        logger.debug("Milvus connect: %s", settings.milvus_url)
+        connections.connect(alias="default", uri=settings.milvus_url, db_name=settings.milvus_db)
+        name = f"{settings.milvus_collection}_{character_id}"
+        if not utility.has_collection(name):
+            logger.warning("Milvus collection not found: %s", name)
             return []
 
         col = Collection(name)
-        col.load()  # 加载集合到内存
-        query_vec = self._encode_question(question)  # 将问题转为向量
-        search_params = {"metric_type": "COSINE", "params": {"nprobe": 16}}  # 搜索参数：余弦相似度
+        col.load()
+        logger.debug("Milvus collection loaded: %s", name)
+        query_vec = self._encode_question(question)
+        search_params = {"metric_type": "COSINE", "params": {"nprobe": 16}}
         results = col.search(
-            data=[query_vec],                                          # 查询向量
-            anns_field="vector",                                       # 搜索的向量字段名
-            param=search_params,                                       # 搜索参数
-            limit=max(top_k, settings.rerank_top_k),                   # 返回条数
-            output_fields=["text"],                                    # 同时返回文本字段
+            data=[query_vec],
+            anns_field="vector",
+            param=search_params,
+            limit=max(top_k, settings.rerank_top_k),
+            output_fields=["text"],
         )
         chunks: list[RetrievedChunk] = []
-        for hit in results[0] if results else []:  # 遍历搜索结果
+        for hit in results[0] if results else []:
             entity = hit.entity
             text = entity.get("text") if entity is not None else ""
             if text:
                 chunks.append(RetrievedChunk(text=text, score=float(hit.score)))
-        return self._deduplicate(chunks)[:top_k]  # 去重后取前 top_k 条
+        deduped = self._deduplicate(chunks)[:top_k]
+        logger.info("Milvus search done: raw=%d, deduped=%d", len(chunks), len(deduped))
+        return deduped
 
     def _encode_question(self, question: str) -> list[float]:
         """
@@ -94,8 +105,8 @@ class RAGService:
                     resp.raise_for_status()
                     data = resp.json()
                 return data["data"][0]["embedding"][:settings.milvus_dim]
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("Embedding API failed, fallback to SHA256: %s", e)
         dim = settings.milvus_dim
         digest = hashlib.sha256(question.encode("utf-8")).digest()
         return [(digest[i % len(digest)] / 255.0) * 2 - 1 for i in range(dim)]

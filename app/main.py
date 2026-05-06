@@ -10,6 +10,8 @@
 """
 
 import logging             # 日志模块
+import signal              # 信号处理
+import sys                 # 系统退出
 import time                # 计时工具
 from pathlib import Path   # 文件路径处理
 
@@ -20,6 +22,7 @@ from fastapi.staticfiles import StaticFiles                 # 静态文件托管
 
 from app.api.router import api_router     # API 路由总配置
 from app.core.config import settings      # 全局配置
+from app.core.logging_config import setup_logging  # 日志配置
 from app.db.init_db import init_db        # 数据库初始化函数
 
 
@@ -65,6 +68,7 @@ class AccessLogMiddleware:
 
 def create_app() -> FastAPI:
     """创建并配置 FastAPI 应用实例"""
+    setup_logging(level=logging.DEBUG if settings.app_debug else logging.INFO)
     app = FastAPI(
         title=settings.app_name,           # 应用名称
         version="0.1.0",                   # 版本号
@@ -124,3 +128,19 @@ def create_app() -> FastAPI:
 
 # 创建应用实例（uvicorn 启动时会引用这个变量）
 app = create_app()
+
+
+def _handle_sigint(signum, frame):
+    """处理 Ctrl+C 中断信号，确保进程能立即退出"""
+    logging.getLogger("app.main").warning("收到 SIGINT (Ctrl+C)，正在退出...")
+    sys.exit(0)
+
+
+signal.signal(signal.SIGINT, _handle_sigint)
+signal.signal(signal.SIGTERM, _handle_sigint)
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0", port=8000)
+

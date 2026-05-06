@@ -699,7 +699,7 @@ export default function App() {
       const body = JSON.stringify({ user_id: userId, character_id: Number(selectedCharacterId), question: prompt, conversation_id: conversationId || 0, latitude: coords.latitude || null, longitude: coords.longitude || null });
       const headers = { "Content-Type": "application/json" };
       if (token) headers.Authorization = `Bearer ${token}`;
-      const response = await fetch(apiUrl("/api/chat/stream"), { method: "POST", headers, body });
+      const response = await fetch(apiUrl("/api/chat"), { method: "POST", headers, body });
       if (!response.ok) {
         const errData = await response.json().catch(() => null);
         throw new Error(errData?.detail || `请求失败：${response.status}`);
@@ -753,7 +753,7 @@ export default function App() {
                 return next;
               });
             }
-            if (evt.replace) {
+            if ("replace" in evt) {
               fullText = evt.replace;
               const captured = fullText;
               setMessages((prev) => {
@@ -795,7 +795,7 @@ export default function App() {
 
     async function streamRequest(forceNoRag) {
       const body = JSON.stringify({ ...baseBody, force_no_rag: forceNoRag });
-      const resp = await fetch(apiUrl("/api/chat/stream"), { method: "POST", headers: hdrs, body });
+      const resp = await fetch(apiUrl("/api/chat"), { method: "POST", headers: hdrs, body });
       if (!resp.ok) throw new Error(`请求失败：${resp.status}`);
       const reader = resp.body.getReader();
       const decoder = new TextDecoder();
@@ -825,7 +825,7 @@ export default function App() {
                 return next;
               });
             }
-            if (evt.replace) {
+            if ("replace" in evt) {
               fullText = evt.replace;
               const captured = fullText;
               setMessages((prev) => {

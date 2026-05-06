@@ -1,7 +1,7 @@
 """
 本文件的作用：PDF 解析与向量入库服务（RAG 知识管道的核心）。
 完整处理流程：
-1. 读取 PDF 文件，提取文字内容（支持 PyMuPDF 和 pypdf 两种库，还支持 OCR 扫描件识别）
+1. 读取 PDF 文件，提取文字内容（支持 PyMuPDF 和 pypdf 两种库，支持 OCR 扫描件识别）
 2. 将长文本切分成固定大小的片段（chunks），带有重叠区域避免信息断裂
 3. 调用 Embedding API 将每个文本片段转换为向量（数字表示的含义）
 4. 将向量和文本写入 Milvus 向量数据库，供后续 RAG 检索使用
@@ -495,6 +495,12 @@ class PDFIngestService:
             kw_rows = kw_future.result()
             vec_rows = vec_future.result()
 
+        logger.info("[Hybrid] query=%s, keyword_hits=%d, vector_hits=%d", query[:60], len(kw_rows), len(vec_rows))
+        for i, r in enumerate(kw_rows[:5], 1):
+            logger.debug("  [BM25  %d] score=%.4f text=%s...", i, float(r.get("score", 0)), str(r.get("text", ""))[:80])
+        for i, r in enumerate(vec_rows[:5], 1):
+            logger.debug("  [ANN   %d] score=%.4f text=%s...", i, float(r.get("score", 0)), str(r.get("text", ""))[:80])
+
         merged: dict[str, dict[str, object]] = {}
 
         for row in kw_rows:
@@ -532,7 +538,70 @@ class PDFIngestService:
                 }
 
         final_rows = sorted(merged.values(), key=lambda x: float(x.get("hybrid_score", 0.0)), reverse=True)
-        return final_rows[:top_k]
+        candidates = final_rows[:max(top_k, settings.rerank_top_k)]
+        logger.info("[Hybrid] merged=%d, candidates=%d (for rerank)", len(final_rows), len(candidates))
+        for i, r in enumerate(candidates, 1):
+            logger.debug("  [Fused %d] hybrid=%.4f method=%-8s text=%s...", i, float(r.get("hybrid_score", 0)), r.get("method", ""), str(r.get("text", ""))[:80])
+        return self._rerank(query, candidates, top_n=top_k)
+
+    def _rerank(self, query: str, rows: list[dict[str, object]], top_n: int | None = None) -> list[dict[str, object]]:
+        """调用 SiliconFlow rerank API 对候选文档重新精排。
+        失败时静默回退到混合检索分数排序，不阻塞主流程。
+        """
+        if not settings.rerank_enabled or not rows:
+            return rows[:top_n] if top_n else rows
+        if top_n is None:
+            top_n = settings.rerank_top_k
+
+        valid_indices: list[int] = []
+        documents: list[str] = []
+        for i, row in enumerate(rows):
+            text = str(row.get("text", "")).strip()
+            if text:
+                valid_indices.append(i)
+                documents.append(text)
+
+        if not documents:
+            return rows[:top_n]
+
+        base_url = (settings.openai_api_base or "").rstrip("/")
+        api_key = settings.openai_api_key or ""
+        if not base_url or not api_key:
+            logger.warning("Rerank skipped: missing API base or key")
+            return rows[:top_n]
+
+        try:
+            import httpx
+            url = f"{base_url}/rerank"
+            headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+            payload = {
+                "model": settings.rerank_model,
+                "query": query,
+                "documents": documents,
+                "top_n": min(top_n, len(documents)),
+            }
+            with httpx.Client(timeout=30.0, trust_env=False) as client:
+                resp = client.post(url, headers=headers, json=payload)
+                resp.raise_for_status()
+                data = resp.json()
+
+            results = data.get("results", [])
+            reranked: list[dict[str, object]] = []
+            for r in results:
+                doc_idx = r.get("index", 0)
+                if 0 <= doc_idx < len(valid_indices):
+                    orig_idx = valid_indices[doc_idx]
+                    row = dict(rows[orig_idx])
+                    row["rerank_score"] = r.get("relevance_score", 0.0)
+                    row["method"] = "rerank"
+                    reranked.append(row)
+            logger.info("[Rerank] done: input=%d, output=%d, model=%s", len(documents), len(reranked), settings.rerank_model)
+            for i, r in enumerate(reranked, 1):
+                logger.info("  [Rerank %d] score=%.4f text=%s...", i, float(r.get("rerank_score", 0)), str(r.get("text", ""))[:80])
+            return reranked
+        except Exception as e:
+            logger.warning("Rerank API failed, fallback to hybrid score: %s", e)
+            return rows[:top_n]
 
     def _embed(self, text: str, *, use_cache: bool = True) -> list[float]:
         """将文本转换为向量：优先查缓存 → 调用Embedding API → 退化为SHA256伪向量"""

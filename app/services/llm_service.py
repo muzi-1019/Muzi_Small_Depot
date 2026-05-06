@@ -12,12 +12,15 @@
 """
 
 import json                          # JSON 解析工具
+import logging                       # 日志
 from collections.abc import Generator  # 生成器类型注解
 
 import httpx  # HTTP 客户端库，用于调用外部 API
 
 from app.core.config import settings          # 全局配置
 from app.schemas.character import CharacterOut  # 角色信息数据结构
+
+logger = logging.getLogger(__name__)
 
 
 class LLMService:
@@ -26,10 +29,15 @@ class LLMService:
     @staticmethod
     def generate(character: CharacterOut, question: str, context: str, memory: str, realtime_context: str = "") -> str:
         """非流式生成：根据配置的提供商选择调用真实 API 或模拟回复，一次性返回完整回答"""
-        provider = (settings.llm_provider or "mock").lower()  # 获取大模型提供商配置
+        provider = (settings.llm_provider or "mock").lower()
+        logger.info("LLM generate start: provider=%s, character=%s, question=%s", provider, character.name, question[:60])
         if provider in {"openai", "vllm", "sglang", "siliconflow", "silicon_flow", "silicon-flow"}:
-            return LLMService._openai_compatible_chat(character, question, context, memory, realtime_context)  # 调用真实 API
-        return LLMService._mock(character, question, context, memory, realtime_context)  # 使用模拟回复
+            answer = LLMService._openai_compatible_chat(character, question, context, memory, realtime_context)
+            logger.info("LLM generate done: answer_len=%d", len(answer))
+            return answer
+        answer = LLMService._mock(character, question, context, memory, realtime_context)
+        logger.info("LLM mock done: answer_len=%d", len(answer))
+        return answer
 
     @staticmethod
     def generate_stream(
@@ -40,28 +48,35 @@ class LLMService:
         使用 SSE（Server-Sent Events）协议，每接收到一小段文字就立即通过 yield 发送给前端。
         """
         provider = (settings.llm_provider or "mock").lower()
+        logger.info("LLM stream start: provider=%s, character=%s, question=%s", provider, character.name, question[:60])
         if provider not in {"openai", "vllm", "sglang", "siliconflow", "silicon_flow", "silicon-flow"}:
-            yield LLMService._mock(character, question, context, memory, realtime_context)  # 非真实 API 时直接返回模拟回复
+            yield LLMService._mock(character, question, context, memory, realtime_context)
+            logger.info("LLM mock stream done")
             return
         url, headers, payload = LLMService._build_openai_request(character, question, context, memory, realtime_context)  # 构建请求
         payload["stream"] = True  # 开启流式模式
-        with httpx.Client(timeout=120.0, trust_env=False) as client:  # 创建 HTTP 客户端（超时120秒）
-            with client.stream("POST", url, headers=headers, json=payload) as resp:  # 发送流式 POST 请求
-                resp.raise_for_status()  # 检查 HTTP 状态码
-                for line in resp.iter_lines():  # 逐行读取 SSE 响应
-                    if not line.startswith("data: "):  # 跳过非数据行
+        chunk_count = 0
+        with httpx.Client(timeout=120.0, trust_env=False) as client:
+            with client.stream("POST", url, headers=headers, json=payload) as resp:
+                resp.raise_for_status()
+                logger.info("LLM stream connected: status=%d, url=%s", resp.status_code, url)
+                for line in resp.iter_lines():
+                    if not line.startswith("data: "):
                         continue
-                    data_str = line[6:]  # 去掉 "data: " 前缀
-                    if data_str.strip() == "[DONE]":  # 流结束标志
+                    data_str = line[6:]
+                    if data_str.strip() == "[DONE]":
                         break
                     try:
-                        chunk = json.loads(data_str)  # 解析 JSON 数据
-                        delta = chunk["choices"][0]["delta"]  # 获取增量内容
-                        content = delta.get("content", "")  # 提取文本片段
+                        chunk = json.loads(data_str)
+                        delta = chunk["choices"][0]["delta"]
+                        content = delta.get("content", "")
                         if content:
-                            yield content  # 将文本片段发送给调用者
+                            chunk_count += 1
+                            yield content
                     except (json.JSONDecodeError, KeyError, IndexError):
-                        continue  # 解析失败则跳过
+                        logger.warning("LLM stream parse error: line=%s", line[:120])
+                        continue
+        logger.info("LLM stream done: chunks=%d", chunk_count)
 
     @staticmethod
     def _mock(character: CharacterOut, question: str, context: str, memory: str, realtime_context: str = "") -> str:

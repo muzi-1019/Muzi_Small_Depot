@@ -27,24 +27,9 @@ from app.services.chat_service import ChatService  # 聊天业务服务
 router = APIRouter()  # 创建聊天模块的路由器
 
 
-@router.post("", response_model=ChatResponse)
-@router.post("/", response_model=ChatResponse, include_in_schema=False)
-@router.post("/send", response_model=ChatResponse)
-@router.post("/send/", response_model=ChatResponse, include_in_schema=False)
-def send_chat(
-    payload: ChatRequest,
-    request: Request,
-    current_user_id: int = Depends(get_current_user_id),
-    chat_service: ChatService = Depends(get_chat_service),
-) -> ChatResponse:
-    """非流式聊天接口：前端发送问题，后端一次性返回完整的 AI 回复"""
-    if payload.user_id != current_user_id:  # 权限校验：只能操作自己的对话
-        raise HTTPException(status_code=403, detail="无权操作其他用户的对话")
-    client_ip = request.headers.get("X-Forwarded-For", "").split(",")[0].strip() or (request.client.host if request.client else None)
-    return chat_service.send_message(payload, client_ip=client_ip)
-
-
-@router.post("/stream")
+@router.post("")
+@router.post("/", include_in_schema=False)
+@router.post("/stream", include_in_schema=False)
 @router.post("/stream/", include_in_schema=False)
 def stream_chat(
     payload: ChatRequest,
@@ -52,7 +37,7 @@ def stream_chat(
     current_user_id: int = Depends(get_current_user_id),
     chat_service: ChatService = Depends(get_chat_service),
 ):
-    """流式聊天接口：前端发送问题，后端通过 SSE 逐字返回 AI 回复（打字机效果）"""
+    """流式聊天接口（默认）：前端发送问题，后端通过 SSE 逐字返回 AI 回复（打字机效果）"""
     if payload.user_id != current_user_id:
         raise HTTPException(status_code=403, detail="无权操作其他用户的对话")
     client_ip = request.headers.get("X-Forwarded-For", "").split(",")[0].strip() or (request.client.host if request.client else None)
@@ -72,6 +57,21 @@ def stream_chat(
         media_type="text/event-stream",              # SSE 内容类型
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},  # 禁用缓存和反向代理缓冲
     )
+
+
+@router.post("/background", response_model=ChatResponse)
+@router.post("/background/", response_model=ChatResponse, include_in_schema=False)
+def background_chat(
+    payload: ChatRequest,
+    request: Request,
+    current_user_id: int = Depends(get_current_user_id),
+    chat_service: ChatService = Depends(get_chat_service),
+) -> ChatResponse:
+    """后台任务聊天接口（非流式）：一次性返回完整的 AI 回复，供批量处理、定时任务等后台场景使用"""
+    if payload.user_id != current_user_id:
+        raise HTTPException(status_code=403, detail="无权操作其他用户的对话")
+    client_ip = request.headers.get("X-Forwarded-For", "").split(",")[0].strip() or (request.client.host if request.client else None)
+    return chat_service.send_message(payload, client_ip=client_ip)
 
 
 @router.get("/conversations", response_model=ConversationListResponse)

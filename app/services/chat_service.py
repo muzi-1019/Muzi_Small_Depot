@@ -15,10 +15,15 @@
 """
 
 import json                          # JSON 序列化工具
+import logging                       # 日志
 import re                            # 正则表达式，用于屏蔽词匹配
+import time                          # 时间控制，用于等待动画
 from collections.abc import Generator  # 生成器类型注解
+from concurrent.futures import ThreadPoolExecutor  # 线程池，用于并行检索
 
 from fastapi import HTTPException  # HTTP 异常类
+
+logger = logging.getLogger(__name__)
 
 from app.core.blocked_words import BLOCKED_WORDS                        # 屏蔽词列表
 from app.core.config import settings                                    # 全局配置
@@ -155,13 +160,28 @@ class ChatService:
 
         memory = self.memory_service.get_recent_context(payload.user_id, payload.character_id, conv_id)
         retrieval_query = self.llm_service.rewrite_query(payload.question, memory) if settings.query_rewrite_enabled else payload.question
-        print(f"[STREAM] rewrite_query done: {retrieval_query[:80]}", flush=True)
+        logger.info("rewrite_query done: %s", retrieval_query[:80])
         if getattr(payload, 'force_no_rag', False):
             context, sources = "", []
         else:
-            context, sources = self._retrieve_context(payload.character_id, retrieval_query)
+            # 并行执行检索 + 等待动画：逐字输出提示语，检索完成则立即停止
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                retrieve_future = executor.submit(self._retrieve_context, payload.character_id, retrieval_query)
+                wait_text = "正在进行检索，请稍等……"
+                for ch in wait_text:
+                    if retrieve_future.done():
+                        break
+                    yield f"data: {json.dumps({'chunk': ch}, ensure_ascii=False)}\n\n"
+                    time.sleep(0.2)
+                try:
+                    context, sources = retrieve_future.result()
+                except Exception as e:
+                    logger.error("retrieve error: %s", e, exc_info=True)
+                    context, sources = "", []
         rag_used = bool(context.strip())
-        print(f"[STREAM] RAG done: rag_used={rag_used}, sources={len(sources)}, context_len={len(context)}", flush=True)
+        logger.info("RAG done: rag_used=%s, sources=%d, context_len=%d", rag_used, len(sources), len(context))
+        # 清空之前的等待提示文字，开始正式回复
+        yield f"data: {json.dumps({'replace': ''}, ensure_ascii=False)}\n\n"
         realtime_ctx = ContextService.get_realtime_context(client_ip, payload.latitude, payload.longitude)
         yield f"data: {json.dumps({'rag_used': rag_used}, ensure_ascii=False)}\n\n"
         full_answer_parts: list[str] = []
@@ -179,12 +199,12 @@ class ChatService:
                     yield f"data: {json.dumps({'chunk': chunk}, ensure_ascii=False)}\n\n"
         except Exception as e:
             import traceback
-            print(f"[STREAM] LLM stream error after {chunk_count} chunks: {e}", flush=True)
+            logger.error("LLM stream error after %d chunks: %s", chunk_count, e, exc_info=True)
             traceback.print_exc()
             yield f"data: {json.dumps({'error': f'生成中断: {type(e).__name__}'}, ensure_ascii=False)}\n\n"
 
         full_answer = "".join(full_answer_parts)
-        print(f"[STREAM] LLM done: {chunk_count} chunks, answer_len={len(full_answer)}", flush=True)
+        logger.info("LLM done: %d chunks, answer_len=%d", chunk_count, len(full_answer))
 
         if blocked:
             refusal = "抱歉，我无法回答这个问题。"
@@ -336,11 +356,18 @@ class ChatService:
         """
         try:
             has = self.pdf_ingest_service.has_data(character_id)
-            print(f"[RAG] character_id={character_id}, has_data={has}", flush=True)
+            logger.info("[RAG] character_id=%d, has_data=%s", character_id, has)
             if not has:
                 return "", []
             rows = self.pdf_ingest_service.search_with_meta(character_id, question)
-            print(f"[RAG] character_id={character_id}, retrieved {len(rows)} chunks", flush=True)
+            logger.info("[RAG] character_id=%d, retrieved %d chunks", character_id, len(rows))
+            for i, row in enumerate(rows, 1):
+                txt = str(row.get("text", ""))[:100]
+                method = row.get("method", "unknown")
+                hybrid_sc = round(float(row.get("hybrid_score", 0.0)), 4)
+                rerank_sc = round(float(row.get("rerank_score", 0.0)), 4)
+                src = row.get("source_file", "")
+                logger.info("  [%d] method=%-8s hybrid=%.4f rerank=%.4f src=%s text=%s...", i, method, hybrid_sc, rerank_sc, src, txt)
             if rows:
                 context_parts = []
                 for i, row in enumerate(rows, 1):
@@ -362,9 +389,7 @@ class ChatService:
                     context_text = context_text + "\n\n" + graph_ctx
                 return context_text, sources
         except Exception as e:
-            import traceback
-            print(f"[RAG] retrieve error: {e}", flush=True)
-            traceback.print_exc()
+            logger.error("[RAG] retrieve error: %s", e, exc_info=True)
         return "", []
 
     @staticmethod

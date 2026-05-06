@@ -45,6 +45,8 @@ class Settings(BaseSettings):
     auto_summary_threshold: int = 10           # 自动生成对话摘要的触发阈值（每累积多少轮对话就自动总结一次）
     retrieval_top_k: int = 8                   # 向量检索时返回最相关的前 K 个文档片段
     rerank_top_k: int = 5                      # 重排序后保留的前 K 个最终结果
+    rerank_enabled: bool = True                # 是否启用 SiliconFlow rerank API 精排
+    rerank_model: str = "BAAI/bge-reranker-v2-m3"  # rerank 模型名称
     hybrid_vector_weight: float = 0.6          # 混合检索中向量检索的权重（0~1，与关键词权重互补）
     hybrid_keyword_weight: float = 0.4         # 混合检索中关键词检索的权重
     query_rewrite_enabled: bool = True         # 是否启用多轮对话 Query Rewriting（指代消解）
