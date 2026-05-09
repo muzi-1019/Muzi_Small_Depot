@@ -35,8 +35,8 @@ class UserOut(BaseModel):
 
 class RegisterResponse(BaseModel):
     """注册响应"""
-    code: int = 200
-    message: str = "success"
+    code: int = 200                            # 业务状态码，200 表示注册成功
+    message: str = "success"                   # 业务提示信息，成功时固定为 success
     data: UserOut                               # 注册成功后返回用户信息
 
 
@@ -48,6 +48,6 @@ class PreferenceRequest(BaseModel):
 
 class PreferenceResponse(BaseModel):
     """设置角色偏好响应"""
-    code: int = 200
-    message: str = "success"
+    code: int = 200                            # 业务状态码，200 表示偏好设置成功
+    message: str = "success"                   # 业务提示信息，成功时固定为 success
     data: UserOut                               # 更新后的用户信息

@@ -43,12 +43,12 @@ class Settings(BaseSettings):
     # ==================== 对话与检索参数 ====================
     short_memory_rounds: int = 20              # 短期记忆保留的最近对话轮数（每轮包含一问一答）
     auto_summary_threshold: int = 10           # 自动生成对话摘要的触发阈值（每累积多少轮对话就自动总结一次）
-    retrieval_top_k: int = 8                   # 向量检索时返回最相关的前 K 个文档片段
-    rerank_top_k: int = 5                      # 重排序后保留的前 K 个最终结果
-    rerank_enabled: bool = True                # 是否启用 SiliconFlow rerank API 精排
-    rerank_model: str = "BAAI/bge-reranker-v2-m3"  # rerank 模型名称
-    hybrid_vector_weight: float = 0.6          # 混合检索中向量检索的权重（0~1，与关键词权重互补）
-    hybrid_keyword_weight: float = 0.4         # 混合检索中关键词检索的权重
+    retrieval_top_k: int = 8                   # 先召回 8 条候选，保证覆盖率；过小容易漏答案，过大又会增加 rerank 和 prompt 成本
+    rerank_top_k: int = 5                      # 精排后保留 5 条进入上下文，兼顾答案依据充分和 prompt 长度可控
+    rerank_enabled: bool = True                # 启用 SiliconFlow rerank API：比单纯分数融合更能判断“问题-片段”真实相关性
+    rerank_model: str = "BAAI/bge-reranker-v2-m3"  # 多语言/中文效果较稳，适合中文招股说明书问答场景
+    hybrid_vector_weight: float = 0.6          # 向量权重略高：自然语言问题常有同义改写，需要语义泛化能力
+    hybrid_keyword_weight: float = 0.4         # 关键词权重保留 0.4：年份、金额、人名、股权比例等精确信息依赖词面匹配
     query_rewrite_enabled: bool = True         # 是否启用多轮对话 Query Rewriting（指代消解）
     retrieval_mode: str = "hybrid"             # 检索模式：vector / keyword / hybrid
     max_concurrent_roles_per_user: int = 20    # 每个用户最多同时与多少个角色进行对话

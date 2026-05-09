@@ -19,13 +19,13 @@ class KnowledgeItemOut(BaseModel):
 
 class KnowledgeListResponse(BaseModel):
     """知识文档列表响应"""
-    code: int = 200
-    message: str = "success"
+    code: int = 200             # 业务状态码，200 表示查询成功
+    message: str = "success"    # 业务提示信息
     data: list[KnowledgeItemOut]  # 文档数组
 
 
 class KnowledgeUploadResponse(BaseModel):
     """知识文档上传响应"""
-    code: int = 200
-    message: str = "success"
+    code: int = 200             # 业务状态码，200 表示上传成功
+    message: str = "success"    # 业务提示信息
     data: KnowledgeItemOut        # 上传成功的文档信息

@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>RAG 角色扮演系统 - 架构图</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,'Microsoft YaHei',sans-serif;background:#0f172a;color:#e2e8f0;padding:30px}
+h1{text-align:center;font-size:28px;margin-bottom:6px;background:linear-gradient(135deg,#60a5fa,#a78bfa);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.sub{text-align:center;color:#94a3b8;margin-bottom:30px;font-size:14px}
+.card{margin-bottom:40px;background:#1e293b;border-radius:16px;padding:28px;border:1px solid #334155}
+.card h2{font-size:20px;margin-bottom:18px;color:#93c5fd;border-left:4px solid #3b82f6;padding-left:12px}
+.mermaid{display:flex;justify-content:center;overflow-x:auto}
+table{width:100%;border-collapse:collapse;margin-top:12px}
+th{background:#334155;padding:10px 16px;text-align:left;color:#93c5fd;font-weight:600}
+td{padding:10px 16px;border-bottom:1px solid #334155;color:#cbd5e1}
+tr:hover td{background:#1a2332}
+</style>
+</head>
+<body>
+<h1>RAG 角色扮演系统 · 架构图</h1>
+<p class="sub">Role-playing System based on RAG &mdash; Full Architecture</p>
+
+<div class="card">
+<h2>一、系统整体架构</h2>
+<pre class="mermaid">
+graph TB
+    Browser["fa:fa-globe 浏览器 React+Vite"]
+
+    subgraph FE["前端 :5173"]
+        F1["登录注册"]
+        F2["角色选择"]
+        F3["聊天界面 SSE"]
+        F4["知识库管理"]
+        F5["对比模式"]
+    end
+
+    subgraph BE["后端 FastAPI :8000"]
+        subgraph APIL["API 路由"]
+            A1["/auth JWT鉴权"]
+            A2["/chat 流式聊天"]
+            A3["/characters 角色CRUD"]
+            A4["/knowledge 知识管理"]
+            A5["/graph 图谱查询"]
+            A6["/admin 后台"]
+        end
+        subgraph SVC["核心服务"]
+            S1["ChatService\n聊天编排中心"]
+            S2["LLMService\n大模型调用"]
+            S3["PDFIngestService\nPDF解析+混合检索"]
+            S4["MemoryService\n短期记忆"]
+            S5["GraphService\n知识图谱"]
+            S6["LightRAGService\n图+向量混合"]
+            S7["ContextService\n天气/IP/时间"]
+        end
+        subgraph INFRA["基础设施"]
+            I1["config.py 统一配置"]
+            I2["security.py 密码+JWT"]
+            I3["deps.py 依赖注入"]
+            I4["logging 统一日志"]
+        end
+    end
+
+    subgraph DB["数据存储"]
+        MySQL[("MySQL\n用户/角色/会话/消息")]
+        Redis[("Redis\n短期记忆/槽位")]
+        Milvus[("Milvus\n向量+BM25")]
+        Neo4j[("Neo4j\n知识图谱")]
+    end
+
+    Cloud["SiliconFlow API\nLLM+Embed+Rerank"]
+
+    Browser --> FE
+    FE -->|REST + SSE| APIL
+    A1 --> I2
+    A2 --> S1
+    A4 --> S3
+    A5 --> S5
+    S1 --> S2
+    S1 --> S3
+    S1 --> S4
+    S1 --> S5
+    S1 --> S6
+    S1 --> S7
+    S2 -->|OpenAI协议| Cloud
+    S3 -->|Embed+Rerank| Cloud
+    S3 --> Milvus
+    S4 --> Redis
+    S1 --> MySQL
+    S5 --> Neo4j
+
+    style Browser fill:#1e40af,stroke:#3b82f6,color:#fff
+    style Cloud fill:#7c2d12,stroke:#f97316,color:#fff
+    style MySQL fill:#4a1d96,stroke:#8b5cf6,color:#fff
+    style Redis fill:#065f46,stroke:#10b981,color:#fff
+    style Milvus fill:#713f12,stroke:#eab308,color:#fff
+    style Neo4j fill:#831843,stroke:#ec4899,color:#fff
+</pre>
+</div>
+
+<div class="card">
+<h2>二、聊天请求处理流程</h2>
+<pre class="mermaid">
+flowchart LR
+    Q["用户提问"] --> B1["1 JWT鉴权"]
+    B1 --> B2["2 屏蔽词检测"]
+    B2 --> B3["3 加载记忆\nRedis 20轮"]
+    B3 --> B4["4 Query Rewrite\nLLM改写"]
+    B4 --> B5["5 混合检索"]
+
+    subgraph B5sub["混合检索"]
+        direction TB
+        BM["BM25 关键词\n权重0.4"]
+        ANN["ANN 向量\n权重0.6"]
+        FUSE["融合去重"]
+        RR["Rerank 精排\nbge-reranker-v2-m3"]
+        BM --> FUSE
+        ANN --> FUSE
+        FUSE --> RR
+    end
+
+    B5 --> B6["6 图谱增强\nNeo4j/LightRAG"]
+    B6 --> B7["7 构建Prompt\n人设+上下文+记忆"]
+    B7 --> B8["8 LLM流式生成\nDeepSeek-V3"]
+    B8 --> B9["9 SSE推送前端"]
+    B9 --> B10["10 持久化\nMySQL+Redis"]
+
+    style Q fill:#1e40af,stroke:#3b82f6,color:#fff
+    style B10 fill:#065f46,stroke:#10b981,color:#fff
+    style RR fill:#7c2d12,stroke:#f97316,color:#fff
+</pre>
+</div>
+
+<div class="card">
+<h2>三、知识入库流程</h2>
+<pre class="mermaid">
+flowchart LR
+    PDF["PDF文件上传"] --> PARSE["PyPDF2 解析"]
+    PARSE --> CHUNK["固定分块\n800字/120重叠"]
+    CHUNK --> EMB["Embedding 向量化\nbge-large-zh 1024维"]
+    CHUNK --> KW["jieba 分词\nBM25 索引"]
+    EMB --> MIL["Milvus\ncharacter_knowledge_id\nCOSINE"]
+    KW --> MIL
+
+    style PDF fill:#1e40af,stroke:#3b82f6,color:#fff
+    style MIL fill:#713f12,stroke:#eab308,color:#fff
+</pre>
+</div>
+
+<div class="card">
+<h2>四、服务依赖关系</h2>
+<pre class="mermaid">
+graph LR
+    CS["ChatService\n聊天编排"] --> LS["LLMService\n大模型"]
+    CS --> PS["PDFIngestService\n检索"]
+    CS --> MS["MemoryService\n记忆"]
+    CS --> GS["GraphService\n图谱"]
+    CS --> LR["LightRAGService"]
+    CS --> CX["ContextService\n环境"]
+    PS --> LS
+    GS --> LS
+
+    style CS fill:#1e40af,stroke:#3b82f6,color:#fff
+    style LS fill:#7c2d12,stroke:#f97316,color:#fff
+</pre>
+</div>
+
+<div class="card">
+<h2>五、技术栈一览</h2>
+<table>
+<tr><th>层级</th><th>技术</th><th>说明</th></tr>
+<tr><td>前端</td><td>React 18 + Vite</td><td>SPA，SSE 流式渲染，JWT 鉴权</td></tr>
+<tr><td>后端框架</td><td>FastAPI + Uvicorn</td><td>异步 ASGI，自动 OpenAPI 文档</td></tr>
+<tr><td>认证</td><td>JWT (HS256) + bcrypt</td><td>无状态 Token 鉴权</td></tr>
+<tr><td>关系库</td><td>MySQL 8.0 + SQLAlchemy</td><td>用户/角色/会话/消息持久化</td></tr>
+<tr><td>缓存</td><td>Redis 7</td><td>短期对话记忆，角色槽位管理</td></tr>
+<tr><td>向量库</td><td>Milvus 2.x</td><td>向量+BM25 双索引，COSINE 度量</td></tr>
+<tr><td>LLM</td><td>DeepSeek-V3</td><td>对话生成、Query 改写、摘要</td></tr>
+<tr><td>Embedding</td><td>bge-large-zh-v1.5</td><td>1024维中文向量</td></tr>
+<tr><td>Rerank</td><td>bge-reranker-v2-m3</td><td>精排重排序</td></tr>
+<tr><td>知识图谱</td><td>Neo4j</td><td>实体关系三元组</td></tr>
+<tr><td>容器化</td><td>Docker Compose</td><td>一键部署全部服务</td></tr>
+<tr><td>反向代理</td><td>Nginx</td><td>静态资源 + API 代理</td></tr>
+</table>
+</div>
+
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: 'dark',
+  themeVariables: {
+    primaryColor: '#1e293b',
+    primaryTextColor: '#e2e8f0',
+    primaryBorderColor: '#475569',
+    lineColor: '#64748b',
+    secondaryColor: '#334155',
+    tertiaryColor: '#1e293b',
+    fontSize: '14px'
+  },
+  flowchart: { curve: 'basis', padding: 15 }
+});
+</script>
+</body>
+</html>

@@ -46,6 +46,13 @@ class LLMService:
         """
         流式生成：逐块返回大模型的回复（实现打字机效果）。
         使用 SSE（Server-Sent Events）协议，每接收到一小段文字就立即通过 yield 发送给前端。
+        为什么优先使用流式生成：
+        - 云端 LLM 首 token 之后会持续输出，流式可以让用户尽早看到结果，而不是等待完整回答；
+        - 对长答案尤其明显，能把“系统卡住”的感受变成“正在生成”；
+        - 后端只保存最终拼接后的完整答案，流式过程不改变数据库结构。
+        为什么使用 OpenAI 兼容协议：
+        - SiliconFlow、OpenAI、vLLM、SGLang 都能复用同一套请求结构；
+        - 以后切换模型或本地推理服务时，只需要改 base_url/model_name，不需要改业务代码。
         """
         provider = (settings.llm_provider or "mock").lower()
         logger.info("LLM stream start: provider=%s, character=%s, question=%s", provider, character.name, question[:60])
@@ -115,6 +122,10 @@ class LLMService:
         构建 OpenAI 兼容格式的 API 请求。
         将角色人设组装为 system 消息，将知识上下文+对话记忆+实时上下文+用户问题组装为 user 消息。
         返回：(请求URL, 请求头, 请求体)
+        Prompt 分层设计的取舍：
+        - system 放角色人设和硬规则，优先级高，能稳定约束回答风格与引用规则；
+        - user 放检索片段、近期记忆和用户问题，便于每轮动态变化；
+        - 实时环境数据单独插入，并明确“仅在用户问到时使用”，避免模型主动胡乱提天气/时间。
         """
         system_parts = [
             f"你是「{character.name}」，领域：{character.domain}。",

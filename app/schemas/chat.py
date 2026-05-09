@@ -20,6 +20,8 @@ class ChatRequest(BaseModel):
     latitude: float | None = None           # 用户地理位置纬度（由前端浏览器定位获取，可选）
     longitude: float | None = None          # 用户地理位置经度（由前端浏览器定位获取，可选）
     force_no_rag: bool = False              # 强制禁用 RAG 检索（用于 RAG vs 纯LLM 对比实验）
+    image_data: str | None = None           # 用户上传图片的 base64/dataURL 内容，用于多模态图片理解
+    image_mime: str | None = None           # 图片 MIME 类型，如 image/png、image/jpeg
 
 
 class RetrievedSource(BaseModel):
@@ -55,8 +57,8 @@ class HistoryItem(BaseModel):
 
 class HistoryResponse(BaseModel):
     """历史消息列表响应"""
-    code: int = 200
-    message: str = "success"
+    code: int = 200                         # 状态码（200 表示成功）
+    message: str = "success"                # 状态消息
     data: list[HistoryItem]                 # 历史消息数组
 
 
@@ -73,15 +75,15 @@ class ConversationItem(BaseModel):
 
 class ConversationListResponse(BaseModel):
     """会话列表响应"""
-    code: int = 200
-    message: str = "success"
+    code: int = 200                         # 状态码（200 表示成功）
+    message: str = "success"                # 状态消息
     data: list[ConversationItem]            # 会话数组
 
 
 class ConversationResponse(BaseModel):
     """单个会话操作响应（创建/重命名等）"""
-    code: int = 200
-    message: str = "success"
+    code: int = 200                         # 状态码（200 表示成功）
+    message: str = "success"                # 状态消息
     data: ConversationItem                  # 操作后的会话信息
 
 

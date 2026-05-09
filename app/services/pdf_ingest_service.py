@@ -220,7 +220,13 @@ class PDFIngestService:
 
     @staticmethod
     def _get_ocr_engine():
-        """获取OCR引擎实例（用于识别扫描版PDF中的图片文字）"""
+        """获取OCR引擎实例（用于识别扫描版PDF中的图片文字）。
+        这里选择 RapidOCR 而不是直接依赖云端 OCR：
+        1. 可离线运行，不会把用户上传的 PDF 图片传到第三方 OCR 平台，隐私风险更低；
+        2. 基于 ONNX Runtime，部署比 PaddleOCR 更轻量，Windows 本地环境更容易安装；
+        3. 对中文扫描件、表格截图中的普通文本识别效果足够支撑 RAG 入库。
+        如果未安装 rapidocr_onnxruntime，会自动跳过 OCR，不影响普通文字版 PDF 的解析流程。
+        """
         try:
             from rapidocr_onnxruntime import RapidOCR
             return RapidOCR()
@@ -229,7 +235,12 @@ class PDFIngestService:
 
     @staticmethod
     def _ocr_page(page, ocr_engine) -> str | None:
-        """对单个PDF页面进行OCR文字识别（当普通文本提取结果太少时使用）"""
+        """对单个PDF页面进行OCR文字识别（当普通文本提取结果太少时使用）。
+        只在页面文字少于阈值时触发 OCR，而不是每页都 OCR：
+        - 普通 PDF 的文本层提取速度远快于 OCR，直接提取即可；
+        - OCR 成本更高且可能产生识别误差，作为扫描件兜底更合适；
+        - 2 倍缩放渲染能提升小字识别率，同时不会像 3~4 倍那样显著增加内存和耗时。
+        """
         if ocr_engine is None:
             try:
                 from rapidocr_onnxruntime import RapidOCR
@@ -251,7 +262,15 @@ class PDFIngestService:
         return None
 
     def _chunk_text(self, text: str, chunk_size: int = 800, overlap: int = 120) -> list[str]:
-        """将长文本切分成固定大小的片段，相邻片段之间有重叠区域（避免关键信息被切断）"""
+        """将长文本切分成固定大小的片段，相邻片段之间有重叠区域（避免关键信息被切断）。
+        选择 800 字符作为默认 chunk_size：
+        - 比 300~500 字符更容易保留完整段落、表格行和上下文关系；
+        - 比 1500+ 字符更不容易混入多个主题，向量表示更集中，检索命中更精准；
+        - 对中文招股说明书这类长文档，800 字符在“语义完整性”和“检索粒度”之间较均衡。
+        选择 120 字符 overlap：
+        - 约 15% 重叠率，能防止股东名称、金额、比例等关键信息刚好被切在边界；
+        - 相比 0 重叠召回更稳，相比 300+ 重叠又不会明显放大 Milvus 存储和检索成本。
+        """
         cleaned = re.sub(r"\s+", " ", text).strip()
         if not cleaned:
             return []
@@ -269,12 +288,12 @@ class PDFIngestService:
         """为单个文本片段构建完整的数据行（来源文件、文本、向量、哈希指纹，角色通过独立集合隔离）"""
         keywords = self._extract_keywords(chunk_text)
         return {
-            "source_file": pdf_path.name,
-            "chunk_index": chunk_index,
-            "text": chunk_text,
-            "keywords": keywords,
-            "vector": self._embed(chunk_text),
-            "chunk_hash": hashlib.sha256(chunk_text.encode("utf-8")).hexdigest(),
+            "source_file": pdf_path.name,  # 来源 PDF 文件名，用于回答时展示知识出处
+            "chunk_index": chunk_index,  # 当前片段在原文中的序号，用于定位和排序
+            "text": chunk_text,  # 实际入库的文本片段，是后续 RAG 返回给大模型的核心上下文
+            "keywords": keywords,  # 从 chunk 中提取的关键词，用于 BM25 关键词检索增强
+            "vector": self._embed(chunk_text),  # chunk 的语义向量，用于 Milvus ANN 向量相似度检索
+            "chunk_hash": hashlib.sha256(chunk_text.encode("utf-8")).hexdigest(),  # 文本指纹，用于去重和避免重复入库
         }
 
     def search_dispatch(self, character_id: int, query: str, top_k: int | None = None, mode: str | None = None) -> list[dict[str, object]]:
@@ -394,6 +413,10 @@ class PDFIngestService:
         """BM25 全文检索：从缓存中获取文档后用 BM25 算法计算相关性。
         BM25 参数: k1=1.2, b=0.75（经典 Okapi BM25 设置）
         使用文档缓存避免重复拉取 Milvus。
+        选择 BM25 的原因：
+        - 对公司名、人名、年份、金额、股权比例等“精确词面匹配”非常敏感；
+        - 相比纯向量检索，BM25 不容易把相似但不包含关键数字的片段排到前面；
+        - 作为向量检索的互补通道，能显著提升财报/招股书问答中的数字类问题召回。
         """
         import math
         if top_k is None:
@@ -449,7 +472,13 @@ class PDFIngestService:
         return scored[:top_k]
 
     def search_vector(self, character_id: int, query: str, top_k: int | None = None) -> list[dict[str, object]]:
-        """向量检索：从Milvus中搜索语义最相关的文本片段（每个角色独立集合）。"""
+        """向量检索：从Milvus中搜索语义最相关的文本片段（每个角色独立集合）。
+        选择向量检索的原因：
+        - 可以处理用户问题和原文表述不完全一致的情况，例如“主营业务”与“主要从事”；
+        - 相比只用关键词，向量能理解同义表达、上下位概念和自然语言问句；
+        - 每个角色独立 collection，避免不同角色知识互相污染，也便于按角色删除/重建知识库。
+        这里使用 COSINE，是因为 embedding 语义相似度通常更关注方向而不是向量长度。
+        """
         from pymilvus import Collection, connections, utility
         if top_k is None:
             top_k = settings.retrieval_top_k
@@ -485,7 +514,35 @@ class PDFIngestService:
         return rows
 
     def search_hybrid(self, character_id: int, query: str, top_k: int | None = None) -> list[dict[str, object]]:
-        """混合检索：并行执行关键词和向量检索，合并后按融合分数排序。"""
+        """混合检索：并行执行关键词和向量检索，合并后按融合分数排序。
+        完整流程：
+        用户问题
+          ↓
+        Query Rewrite（可选，在 ChatService 中完成）
+          ↓
+        同时执行两路检索
+          ├─ BM25 关键词检索：找包含关键词/数字/人名的 chunk
+            入库时保存 keywords 字段，查询时从 Milvus 拉取文本和关键词，在 Python 内存里临时构建 BM25 文档缓存并计算分数。
+          └─ 向量检索 ANN：找语义相似的 chunk
+          ↓
+        两路结果合并去重
+          ↓
+        按 0.4（BM25）+ 0.6（向量）加权融合
+          ↓
+        取候选结果
+          ↓
+        Rerank 精排
+          ↓
+        返回 Top-K 给大模型作为上下文
+
+        为什么采用 BM25 + 向量混合，而不是只用一种检索：
+        - 纯 BM25：精确数字、人名召回好，但对同义改写、口语化问题不够鲁棒；
+        - 纯向量：语义泛化强，但在财务数据、日期、股权比例等精确信息上可能“语义相近但事实不准”；
+        - 混合检索把两者合并，既能抓住关键词，又能覆盖语义表达差异。
+        权重默认向量 0.6、关键词 0.4：
+        - 角色问答多数是自然语言问题，向量应占主导；
+        - 招股说明书又包含大量专有名词和数字，保留 0.4 BM25 可以提高事实类问题稳定性。
+        """
         from concurrent.futures import ThreadPoolExecutor
         if top_k is None:
             top_k = settings.retrieval_top_k
@@ -494,6 +551,9 @@ class PDFIngestService:
             vec_future = pool.submit(self.search_vector, character_id, query, max(top_k, 8))
             kw_rows = kw_future.result()
             vec_rows = vec_future.result()
+
+        # 用 max(top_k, 8) 扩大召回量：两路各取 8 条（如果 top_k<8），为后续融合留出冗余
+        # 并行执行：BM25 和向量检索耗时相当，并行可节省约 50% 时间
 
         logger.info("[Hybrid] query=%s, keyword_hits=%d, vector_hits=%d", query[:60], len(kw_rows), len(vec_rows))
         for i, r in enumerate(kw_rows[:5], 1):
@@ -547,6 +607,12 @@ class PDFIngestService:
     def _rerank(self, query: str, rows: list[dict[str, object]], top_n: int | None = None) -> list[dict[str, object]]:
         """调用 SiliconFlow rerank API 对候选文档重新精排。
         失败时静默回退到混合检索分数排序，不阻塞主流程。
+        为什么在混合检索后再做 Rerank：
+        - 第一阶段检索强调“召回”，宁可多取一些候选，避免漏掉答案；
+        - Rerank 模型逐对判断“问题-片段”的相关性，比简单分数融合更接近真实问答需求；
+        - 相比直接让 LLM 在大量片段里找答案，Rerank 成本更低，也能减少上下文长度和幻觉风险。
+        这里保留 fallback，是因为 RAG 系统不能强依赖外部重排序 API；即使 Rerank 超时或失败，
+        仍可用 BM25+向量融合结果继续回答，保证可用性优先。
         """
         if not settings.rerank_enabled or not rows:
             return rows[:top_n] if top_n else rows
@@ -657,13 +723,13 @@ class PDFIngestService:
             need_create = True
         if need_create:
             fields = [
-                FieldSchema(name="id", dtype=DataType.INT64, is_primary=True, auto_id=True),
-                FieldSchema(name="source_file", dtype=DataType.VARCHAR, max_length=255),
-                FieldSchema(name="chunk_index", dtype=DataType.INT64),
-                FieldSchema(name="chunk_hash", dtype=DataType.VARCHAR, max_length=64),
-                FieldSchema(name="text", dtype=DataType.VARCHAR, max_length=65535),
-                FieldSchema(name="keywords", dtype=DataType.VARCHAR, max_length=4096),
-                FieldSchema(name="vector", dtype=DataType.FLOAT_VECTOR, dim=settings.milvus_dim),
+                FieldSchema(name="id", dtype=DataType.INT64, is_primary=True, auto_id=True),  # Milvus 自动生成的主键ID
+                FieldSchema(name="source_file", dtype=DataType.VARCHAR, max_length=255),  # 来源文件名，用于展示引用出处
+                FieldSchema(name="chunk_index", dtype=DataType.INT64),  # 文本块序号，用于定位原文位置
+                FieldSchema(name="chunk_hash", dtype=DataType.VARCHAR, max_length=64),  # 文本 SHA256 指纹，用于去重
+                FieldSchema(name="text", dtype=DataType.VARCHAR, max_length=65535),  # 原始文本块，作为 RAG 上下文返回
+                FieldSchema(name="keywords", dtype=DataType.VARCHAR, max_length=4096),  # 关键词串，用于 BM25 关键词检索
+                FieldSchema(name="vector", dtype=DataType.FLOAT_VECTOR, dim=settings.milvus_dim),  # 语义向量字段，用于 ANN 相似度检索
             ]
             schema = CollectionSchema(fields, description=f"Knowledge base for character {character_id}")
             collection = Collection(name=coll_name, schema=schema)
@@ -674,12 +740,12 @@ class PDFIngestService:
             collection.create_index(field_name="vector", index_params=index_params)
         collection.load()
         columns = [
-            [row["source_file"] for row in rows],
-            [row.get("chunk_index", 0) for row in rows],
-            [row["chunk_hash"] for row in rows],
-            [row["text"] for row in rows],
-            [row.get("keywords", "") for row in rows],
-            [row["vector"] for row in rows],
+            [row["source_file"] for row in rows],  # source_file 列：每个 chunk 的来源 PDF
+            [row.get("chunk_index", 0) for row in rows],  # chunk_index 列：每个 chunk 的顺序编号
+            [row["chunk_hash"] for row in rows],  # chunk_hash 列：每个 chunk 的去重指纹
+            [row["text"] for row in rows],  # text 列：实际可被检索和送入 prompt 的文本
+            [row.get("keywords", "") for row in rows],  # keywords 列：BM25 使用的关键词补充
+            [row["vector"] for row in rows],  # vector 列：Milvus 建索引和向量搜索使用
         ]
         collection.insert(columns)
         collection.flush()
