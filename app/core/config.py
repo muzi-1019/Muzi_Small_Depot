@@ -26,11 +26,17 @@ class Settings(BaseSettings):
     milvus_collection: str = "character_knowledge"                             # Milvus 集合名前缀（每个角色独立集合：character_knowledge_{id}）
     milvus_enabled: bool = True                                                # 是否启用 Milvus 向量检索功能
     milvus_dim: int = 1024                                                     # 向量维度，必须与 embedding 模型输出的维度一致（bge-large-zh-v1.5 输出 1024 维）
+    neo4j_enabled: bool = True                                                 # 是否启用 Neo4j 图谱关系召回，失败时自动跳过
+    neo4j_uri: str = "bolt://localhost:7687"                                    # Neo4j Bolt 连接地址
+    neo4j_user: str = "neo4j"                                                  # Neo4j 用户名
+    neo4j_password: str = "neo4j123"                                           # Neo4j 密码
+    neo4j_top_k: int = 8                                                       # Neo4j 图谱召回最多返回的关系条数
 
     # ==================== 大模型 / AI 配置 ====================
     llm_provider: str = "mock"                                      # 大模型提供商：mock（模拟回复）/ siliconflow（硅基流动云端 API）/ openai 等
     llm_model_name: str = "mock-model"                              # 大模型的模型名称，如 deepseek-ai/DeepSeek-V3
     embedding_model_name: str = "bge-small"                         # 文本向量化模型名称，用于把文字转换成数字向量以便检索
+    vision_model_name: str = "deepseek-ai/DeepSeek-OCR"
     openai_api_base: str = "https://api.openai.com/v1"              # 大模型 API 的基础地址（兼容 OpenAI 格式的接口地址）
     openai_api_key: str = ""                                        # 大模型 API 的密钥（鉴权用，类似密码）
     siliconflow_api_base: str = "https://api.siliconflow.cn/v1"     # 硅基流动平台的 API 地址（备用）

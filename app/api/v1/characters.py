@@ -111,17 +111,21 @@ async def upload_dataset(
     dest.write_bytes(body)
 
     # 对文本内容进行清洗（去除多余空白、格式化等）
-    cleaned_text = _clean_dataset(body.decode("utf-8", errors="ignore"), suffix)
+    decoded_text, detected_encoding = _decode_text_body(body)
+    cleaned_text = _clean_dataset(decoded_text, suffix)
     cleaned_path = base_dir / f"{uuid.uuid4().hex}_cleaned.txt"
     cleaned_path.write_text(cleaned_text, encoding="utf-8")
 
-    # PDF 文件自动解析并写入向量知识库
-    if suffix == ".pdf":
-        from app.services.pdf_ingest_service import PDFIngestService
-        try:
-            PDFIngestService().ingest_file(character_id, dest.resolve())
-        except Exception:
-            pass
+    vector_rows = 0
+    from app.services.pdf_ingest_service import PDFIngestService
+    try:
+        ingest_service = PDFIngestService()
+        if suffix == ".pdf":
+            vector_rows = ingest_service.ingest_file(character_id, dest.resolve())
+        else:
+            vector_rows = ingest_service.ingest_text(character_id, raw_name, cleaned_text)
+    except Exception:
+        pass
 
     return {
         "code": 200,
@@ -129,7 +133,18 @@ async def upload_dataset(
         "original_file": raw_name,
         "cleaned_file": str(cleaned_path.name),
         "cleaned_chars": len(cleaned_text),
+        "detected_encoding": detected_encoding,
+        "vector_rows": vector_rows,
     }
+
+
+def _decode_text_body(body: bytes) -> tuple[str, str]:
+    for encoding in ("utf-8-sig", "utf-8", "gb18030", "gbk", "gb2312"):
+        try:
+            return body.decode(encoding), encoding
+        except UnicodeDecodeError:
+            continue
+    return body.decode("utf-8", errors="replace"), "utf-8-replace"
 
 
 def _clean_dataset(text: str, suffix: str) -> str:

@@ -98,7 +98,7 @@ class ImageUnderstandingService:
         url = f"{base_url}/chat/completions"
         headers = {"Authorization": f"Bearer {api_key}"}
         payload = {
-            "model": "Pro/Qwen/Qwen2.5-VL-7B-Instruct",
+            "model": settings.vision_model_name,
             "messages": [
                 {"role": "system", "content": "你是一个图片理解助手。请用中文分析图片。如果有文字，提取关键文字；如果没有文字，描述主体、场景、关系、图表趋势或异常点。"},
                 {"role": "user", "content": [

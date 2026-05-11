@@ -70,20 +70,54 @@ class PDFIngestService:
         """单文件入库：解析指定PDF → 切分文本 → 向量化 → 写入Milvus，返回写入的向量条数"""
         if not pdf_path.exists():
             return 0
+        logger.info("[PDF ingest] start character_id=%s file=%s", character_id, pdf_path)
         text = self._extract_text(pdf_path)
         chunks = self._chunk_text(text)
+        logger.info("[PDF ingest] extracted chars=%d chunks=%d file=%s", len(text), len(chunks), pdf_path.name)
         if not chunks:
             return 0
-        rows = [self._build_row(character_id, pdf_path, chunk, chunk_index) for chunk_index, chunk in enumerate(chunks)]
+        rows = []
+        for chunk_index, chunk in enumerate(chunks):
+            if chunk_index % 20 == 0:
+                logger.info("[PDF ingest] embedding progress %d/%d file=%s", chunk_index, len(chunks), pdf_path.name)
+            rows.append(self._build_row(character_id, pdf_path, chunk, chunk_index))
+        logger.info("[PDF ingest] inserting rows=%d character_id=%s", len(rows), character_id)
         self._insert_into_milvus(rows, character_id)
+        logger.info("[PDF ingest] done rows=%d character_id=%s file=%s", len(rows), character_id, pdf_path.name)
+        return len(rows)
+
+    def ingest_text(self, character_id: int, source_name: str, text: str) -> int:
+        if not text.strip():
+            return 0
+        chunks = self._chunk_text(text)
+        logger.info("[Text ingest] extracted chars=%d chunks=%d source=%s", len(text), len(chunks), source_name)
+        if not chunks:
+            return 0
+        source_path = Path(source_name)
+        rows = []
+        # 每个rows包括'''{
+        # "source_file": 文件名,
+        # "chunk_index": 第几个片段,
+        # "text": chunk 文本,
+        # "keywords": 关键词,
+        # "vector": embedding 向量,
+        # "chunk_hash": 文本哈希
+        # }'''
+        for chunk_index, chunk in enumerate(chunks):
+            if chunk_index % 20 == 0:
+                logger.info("[Text ingest] embedding progress %d/%d source=%s", chunk_index, len(chunks), source_name)
+            rows.append(self._build_row(character_id, source_path, chunk, chunk_index))
+        logger.info("[Text ingest] inserting rows=%d character_id=%s source=%s", len(rows), character_id, source_name)
+        self._insert_into_milvus(rows, character_id)
+        logger.info("[Text ingest] done rows=%d character_id=%s source=%s", len(rows), character_id, source_name)
         return len(rows)
 
     def _role_pdf_mapping(self) -> dict[int, Path]:
         """预定义的角色ID与PDF文件的映射关系（硬编码的初始知识库配置）"""
         data_dir = Path(settings.data_dir)
         return {
-            2: data_dir / "国家基层高血压防治管理手册2025版.pdf",
-            3: data_dir / "中华人民共和国宪法.pdf",
+            2: data_dir / "data/国家基层高血压防治管理手册2025版.pdf",
+            3: data_dir / "data/中华人民共和国宪法.pdf",
         }
 
     def _extract_text(self, pdf_path: Path) -> str:
@@ -100,15 +134,15 @@ class PDFIngestService:
         doc = fitz.open(str(pdf_path))
         ocr_engine = None
         pages: list[str] = []
-        for page in doc:
+        total_pages = len(doc)
+        for page_index, page in enumerate(doc, 1):
+            logger.info("[PDF ingest] parsing page %d/%d file=%s", page_index, total_pages, pdf_path.name)
             table_md = self._extract_tables_as_markdown(page)
             text = page.get_text("text") or ""
             if len(text.strip()) < 30:
+                if ocr_engine is None:
+                    ocr_engine = self._get_ocr_engine()
                 ocr_text = self._ocr_page(page, ocr_engine)
-                if ocr_text is not None:
-                    if ocr_engine is None:
-                        ocr_engine = self._get_ocr_engine()
-                    ocr_text = self._ocr_page(page, ocr_engine)
                 text = ocr_text if ocr_text else text
             image_desc = self._extract_images_as_text(page)
             if table_md:
@@ -132,9 +166,16 @@ class PDFIngestService:
             return ""
         descriptions: list[str] = []
         doc = page.parent
-        for img_info in images:
+        for img_index, img_info in enumerate(images[:3], 1):
+            # 这里只处理每页前 3 张图片。
+            # 原因是：
+            # 避免一页里有太多小图导致调用视觉模型太慢
+            # 控制成本
+            # 避免入库时间过长
             try:
                 xref = img_info[0]
+                # xref 是 PDF 内部图片引用 ID
+                # 通过它可以提取图片二进制数据
                 base_image = doc.extract_image(xref)
                 if not base_image:
                     continue
@@ -142,8 +183,12 @@ class PDFIngestService:
                 height = base_image.get("height", 0)
                 if width < 100 or height < 100:
                     continue
+                    # 小于 100x100 的图片跳过。
+                    # 原因是很多 PDF 里有：logo、icon、装饰图、页眉页脚小图
+                    # 这些对检索价值不大，直接返回 continue
                 image_bytes = base_image["image"]
                 ext = base_image.get("ext", "png")
+                logger.info("[PDF ingest] describing image %d/%d size=%sx%s", img_index, min(len(images), 3), width, height)
                 desc = self._describe_image(image_bytes, ext)
                 if desc:
                     descriptions.append(f"[图像内容描述] {desc}")
@@ -153,8 +198,9 @@ class PDFIngestService:
 
     @staticmethod
     def _describe_image(image_bytes: bytes, ext: str = "png") -> str:
-        """调用多模态视觉模型（如 Qwen-VL / InternVL）对图像内容生成文字描述。
-        将图像 base64 编码后通过 OpenAI 兼容的 vision API 发送。
+        """调用配置中的视觉模型"deepseek-ai/DeepSeek-OCR"，为 PDF 中提取出的图片生成中文描述。
+        图片会被编码为 base64 data URL，并通过 OpenAI 兼容的 chat/completions 接口发送。
+        如果外部接口调用失败，则返回空字符串，不中断 PDF 入库流程。
         """
         import base64
         base_url = (settings.openai_api_base or "").rstrip("/")
@@ -162,13 +208,24 @@ class PDFIngestService:
         if not base_url or not api_key:
             return ""
         mime = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg"}.get(ext, f"image/{ext}")
+        # 根据图片后缀生成 MIME 类型，因为互联网媒体类型（MIME）有严格标准，图片格式必须使用规范的类型名
+        # PNG 标准是 image/png，JPEG 标准是 image/jpeg（不是 image/jpg）
+        # 直接使用 f"image/{ext}" 会产生 image/jpg（非标准），可能导致某些浏览器或 API 解析异常
         b64 = base64.b64encode(image_bytes).decode("utf-8")
+        # HTTP/HTML/JSON 只能传输文本，不能直接传输二进制数据
+        # Base64 将二进制（8-bit bytes）编码为 ASCII 文本（A-Z、a-z、0-9、+、/）---（二进制安全传输）
+        # 传统方式：图片需要单独 HTTP 请求，浏览器要额外请求
+        # Data URL 方式：图片数据作为 HTML/CSS 的一部分，一次请求完成，可以 ---（减少 HTTP 请求次数）
+        # API 接口传输图片时，Base64 字符串可以放在 JSON 中 ---（便于数据交换）
+        # .b64encode() → 编码为 bytes / .decode("utf-8") → 转为字符串
+        # 接收方用 base64.b64decode(b64) 还原原始二进制 ---（编码和解码的可逆性）
+
         url = f"{base_url}/chat/completions"
         headers = {"Authorization": f"Bearer {api_key}"}
         payload = {
-            "model": "Pro/Qwen/Qwen2.5-VL-7B-Instruct",
+            "model": settings.vision_model_name,
             "messages": [
-                {"role": "system", "content": "你是一个图像分析助手。请用中文简洁描述图像中的关键信息，包括图表类型、数据趋势、组织结构等。不超过200字。"},
+                {"role": "system", "content": "你是一个图像分析助手。请用中文简洁描述图像中的关键信息，包括但不限于图表类型、数据趋势、组织结构等。不超过200字。"},
                 {"role": "user", "content": [
                     {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}},
                     {"type": "text", "text": "请描述这张图片的内容。"},
@@ -179,7 +236,7 @@ class PDFIngestService:
         }
         try:
             import httpx
-            with httpx.Client(timeout=30.0, trust_env=False) as client:
+            with httpx.Client(timeout=8.0, trust_env=False) as client:
                 resp = client.post(url, headers=headers, json=payload)
                 resp.raise_for_status()
                 data = resp.json()
@@ -514,18 +571,19 @@ class PDFIngestService:
         return rows
 
     def search_hybrid(self, character_id: int, query: str, top_k: int | None = None) -> list[dict[str, object]]:
-        """混合检索：并行执行关键词和向量检索，合并后按融合分数排序。
+        """混合检索：并行执行关键词、向量和 Neo4j 图谱检索，合并后按融合分数排序。
         完整流程：
         用户问题
           ↓
         Query Rewrite（可选，在 ChatService 中完成）
           ↓
-        同时执行两路检索
+        同时执行三路检索
           ├─ BM25 关键词检索：找包含关键词/数字/人名的 chunk
             入库时保存 keywords 字段，查询时从 Milvus 拉取文本和关键词，在 Python 内存里临时构建 BM25 文档缓存并计算分数。
-          └─ 向量检索 ANN：找语义相似的 chunk
+          ├─ 向量检索 ANN：找语义相似的 chunk
+          └─ Neo4j 图谱检索：找实体之间的结构化关系
           ↓
-        两路结果合并去重
+        三路结果合并去重
           ↓
         按 0.4（BM25）+ 0.6（向量）加权融合
           ↓
@@ -535,31 +593,53 @@ class PDFIngestService:
           ↓
         返回 Top-K 给大模型作为上下文
 
-        为什么采用 BM25 + 向量混合，而不是只用一种检索：
+        为什么采用 BM25 + 向量 + Neo4j 混合，而不是只用一种检索：
         - 纯 BM25：精确数字、人名召回好，但对同义改写、口语化问题不够鲁棒；
         - 纯向量：语义泛化强，但在财务数据、日期、股权比例等精确信息上可能“语义相近但事实不准”；
-        - 混合检索把两者合并，既能抓住关键词，又能覆盖语义表达差异。
+        - Neo4j 图谱检索补充实体关系、股权关系、关联方关系等结构化信息；
+        - 混合检索把三者合并，既能抓住关键词，又能覆盖语义表达差异和结构化关系。
         权重默认向量 0.6、关键词 0.4：
         - 角色问答多数是自然语言问题，向量应占主导；
         - 招股说明书又包含大量专有名词和数字，保留 0.4 BM25 可以提高事实类问题稳定性。
         """
+        # 导入 ThreadPoolExecutor，用于创建线程池，实现并行执行任务（提高检索效率）
         from concurrent.futures import ThreadPoolExecutor
+        # 如果没有指定 top_k（返回的结果数量），则使用配置文件中的默认值
         if top_k is None:
             top_k = settings.retrieval_top_k
-        with ThreadPoolExecutor(max_workers=2) as pool:
+        # 导入 Neo4jGraphService（图数据库服务类），用于从 Neo4j 中检索关系数据
+        from app.services.neo4j_graph_service import Neo4jGraphService
+        # 创建一个最大工作线程数为 3 的线程池（同时执行 3 个检索任务）
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            # 提交关键词检索任务到线程池，返回一个 Future 对象
+            # self.search_keyword: BM25 关键词检索方法
+            # 参数：character_id 表示角色 ID，query 表示检索问题，max(top_k, 8) 表示至少召回 8 条候选
             kw_future = pool.submit(self.search_keyword, character_id, query, max(top_k, 8))
+            # 提交向量检索任务到线程池（语义相似度检索）
+            # self.search_vector: 向量检索方法（Embedding + Milvus）
             vec_future = pool.submit(self.search_vector, character_id, query, max(top_k, 8))
+            # 提交 Neo4j 图数据库检索任务
+            # Neo4jGraphService().search_rows: 从 Neo4j 知识图谱中检索角色相关的实体关系，失败时返回空列表
+            # neo4j_top_k: 从配置中读取，控制 Neo4j 最多返回的关系条数
+            neo4j_future = pool.submit(Neo4jGraphService().search_rows, character_id, query,
+                                       max(top_k, settings.neo4j_top_k))
+            # 统一获取三路召回结果；result() 会等待对应任务完成
+            # 获取关键字检索的结果（阻塞等待，直到该任务完成）
             kw_rows = kw_future.result()
+            # 获取向量检索的结果（阻塞等待）
             vec_rows = vec_future.result()
+            # 获取 Neo4j 检索的结果（阻塞等待）
+            neo4j_rows = neo4j_future.result()
+        # 用 max(top_k, 8) 扩大召回量：多路各取足够候选，为后续融合和 rerank 留出冗余。
+        # 并行执行：BM25、向量检索和 Neo4j 图谱检索互不依赖，可降低整体等待时间。
 
-        # 用 max(top_k, 8) 扩大召回量：两路各取 8 条（如果 top_k<8），为后续融合留出冗余
-        # 并行执行：BM25 和向量检索耗时相当，并行可节省约 50% 时间
-
-        logger.info("[Hybrid] query=%s, keyword_hits=%d, vector_hits=%d", query[:60], len(kw_rows), len(vec_rows))
+        logger.info("[Hybrid] query=%s, keyword_hits=%d, vector_hits=%d, neo4j_hits=%d", query[:60], len(kw_rows), len(vec_rows), len(neo4j_rows))
         for i, r in enumerate(kw_rows[:5], 1):
             logger.debug("  [BM25  %d] score=%.4f text=%s...", i, float(r.get("score", 0)), str(r.get("text", ""))[:80])
         for i, r in enumerate(vec_rows[:5], 1):
             logger.debug("  [ANN   %d] score=%.4f text=%s...", i, float(r.get("score", 0)), str(r.get("text", ""))[:80])
+        for i, r in enumerate(neo4j_rows[:5], 1):
+            logger.debug("  [Neo4j %d] score=%.4f text=%s...", i, float(r.get("score", 0)), str(r.get("text", ""))[:80])
 
         merged: dict[str, dict[str, object]] = {}
 
@@ -595,6 +675,25 @@ class PDFIngestService:
                     "keyword_score": 0.0,
                     "hybrid_score": normalized_vec * settings.hybrid_vector_weight,
                     "method": "vector",
+                }
+
+        for row in neo4j_rows:
+            text = str(row.get("text", ""))
+            if not text:
+                continue
+            existing = merged.get(text)
+            if existing:
+                existing["graph_score"] = 1.0
+                existing["hybrid_score"] = float(existing.get("hybrid_score", 0.0)) + 1.0
+                existing["method"] = "hybrid_graph"
+            else:
+                merged[text] = {
+                    **row,
+                    "vector_score": 0.0,
+                    "keyword_score": 0.0,
+                    "graph_score": 1.0,
+                    "hybrid_score": 1.0,
+                    "method": "neo4j_graph",
                 }
 
         final_rows = sorted(merged.values(), key=lambda x: float(x.get("hybrid_score", 0.0)), reverse=True)
@@ -669,9 +768,16 @@ class PDFIngestService:
             logger.warning("Rerank API failed, fallback to hybrid score: %s", e)
             return rows[:top_n]
 
+    @staticmethod
+    def _prepare_embedding_input(text: str, max_chars: int) -> str:
+        prepared = re.sub(r"\s+", " ", text).strip()
+        prepared = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", prepared)
+        return prepared[:max_chars]
+
     def _embed(self, text: str, *, use_cache: bool = True) -> list[float]:
         """将文本转换为向量：优先查缓存 → 调用Embedding API → 退化为SHA256伪向量"""
-        cache_key = hashlib.md5(text[:2000].encode("utf-8")).hexdigest()
+        embed_text = self._prepare_embedding_input(text, 1000)
+        cache_key = hashlib.md5(embed_text.encode("utf-8")).hexdigest()
         if use_cache and cache_key in _embed_cache:
             _embed_cache.move_to_end(cache_key)  # 刷新 LRU 顺序
             return _embed_cache[cache_key]
@@ -681,15 +787,27 @@ class PDFIngestService:
             import httpx
             url = f"{base_url}/embeddings"
             headers = {"Authorization": f"Bearer {api_key}"}
-            payload = {"model": settings.embedding_model_name, "input": text[:2000]}
             try:
                 with httpx.Client(timeout=15.0, trust_env=False) as client:
-                    resp = client.post(url, headers=headers, json=payload)
-                    resp.raise_for_status()
-                    data = resp.json()
-                    vec = data["data"][0]["embedding"][:settings.milvus_dim]
-                    self._cache_embed_result(cache_key, vec)
-                    return vec
+                    last_error: Exception | None = None
+                    for max_chars in (1000, 600, 300):
+                        candidate = self._prepare_embedding_input(text, max_chars)
+                        if not candidate:
+                            continue
+                        payload = {"model": settings.embedding_model_name, "input": candidate}
+                        try:
+                            resp = client.post(url, headers=headers, json=payload)
+                            resp.raise_for_status()
+                            data = resp.json()
+                            vec = data["data"][0]["embedding"][:settings.milvus_dim]
+                            self._cache_embed_result(cache_key, vec)
+                            return vec
+                        except httpx.HTTPStatusError as exc:
+                            last_error = exc
+                            if exc.response.status_code != 413:
+                                raise
+                    if last_error:
+                        raise last_error
             except Exception as e:
                 logger.warning("Embedding API failed, falling back to SHA256: %s", e)
         digest = hashlib.sha256(text.encode("utf-8")).digest()
