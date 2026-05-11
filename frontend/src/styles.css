@@ -213,7 +213,7 @@ label { font-size: 12px; color: var(--text-secondary); }
 .empty-card { display:grid; place-items:center; min-height: 240px; border: 1px dashed var(--empty-border); background: var(--empty-bg); border-radius: 18px; }
 .skeleton { height:72px; border-radius:16px; margin-bottom:0; background: linear-gradient(90deg,#edf3ff 0%,#f8fbff 50%,#edf3ff 100%); background-size:200% 100%; animation: shimmer 1.2s infinite; }
 .skeleton.short { width:64%; }
-.toast { position: fixed; right: 24px; bottom: 24px; padding: 12px 14px; border-radius: 14px; background: var(--toast-bg); color: #fff; box-shadow: 0 10px 25px rgba(12, 24, 50, 0.25); max-width: min(80vw, 560px); width: fit-content; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; line-height: 1.5; }
+.toast { position: fixed; right: 24px; bottom: 96px; z-index: 9999; padding: 12px 14px; border-radius: 14px; background: var(--toast-bg); color: #fff; box-shadow: 0 10px 25px rgba(12, 24, 50, 0.25); max-width: min(80vw, 560px); width: fit-content; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; line-height: 1.5; }
 .bubble.assistant p { transition: opacity .12s ease; }
 /* ========== 参考文献面板 ========== */
 .sources-panel { margin-top: 10px; border-top: 1px solid var(--panel-border); padding-top: 8px; }
@@ -362,7 +362,7 @@ label { font-size: 12px; color: var(--text-secondary); }
   .conversation-item:hover { transform: none; box-shadow: none; }
 
   /* --- Toast / 搜索 --- */
-  .toast { right: 6px; bottom: calc(6px + env(safe-area-inset-bottom)); left: 6px; max-width: none; font-size: 12px; padding: 8px 10px; border-radius: 10px; }
+  .toast { right: 6px; bottom: calc(76px + env(safe-area-inset-bottom)); left: 6px; z-index: 9999; max-width: none; font-size: 12px; padding: 8px 10px; border-radius: 10px; }
   .search-overlay { padding: 6px; }
 }
 
@@ -395,7 +395,7 @@ label { font-size: 12px; color: var(--text-secondary); }
   .conversation-item-head span { display: none; }
   .conversation-list { max-height: 160px; }
   .knowledge-panel { max-height: 120px; }
-  .toast { left: 4px; right: 4px; bottom: calc(4px + env(safe-area-inset-bottom)); padding: 8px; font-size: 11px; }
+  .toast { left: 4px; right: 4px; bottom: calc(68px + env(safe-area-inset-bottom)); z-index: 9999; padding: 8px; font-size: 11px; }
 }
 
 /* ========== 响应式适配：超小屏手机（≤400px）========== */
