@@ -12,7 +12,7 @@
 - MySQL 仍负责消息永久留存，Redis 只承担会话态缓存，两者职责更清晰。
 """
 
-import logging
+import logging  # 日志模块，用于记录 Redis 状态和降级行为
 import time  # 时间戳工具，用于记录角色活跃时间
 
 import redis               # Redis 客户端库
@@ -20,10 +20,10 @@ from fastapi import HTTPException  # HTTP 异常类
 
 from app.core.config import settings  # 全局配置
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)  # 当前模块日志器
 
-_fallback_sessions: dict[str, list[str]] = {}
-_fallback_summaries: dict[str, str] = {}
+_fallback_sessions: dict[str, list[str]] = {}  # Redis 不可用时的进程内会话记忆兜底缓存
+_fallback_summaries: dict[str, str] = {}  # Redis 不可用时的进程内摘要兜底缓存
 
 
 class MemoryService:
@@ -37,26 +37,26 @@ class MemoryService:
             settings.redis_url,
             decode_responses=True,
         )
-        self.redis_available = True
+        self.redis_available = True  # 标记 Redis 当前是否可用，失败后会切换为 False 避免反复 ping
 
     def _redis_ok(self) -> bool:
         """检查 Redis 是否可用；不可用时使用内存兜底，避免聊天主流程中断"""
-        if not self.redis_available:
-            return False
-        try:
-            self.redis_client.ping()
-            return True
-        except redis.RedisError as exc:
-            self.redis_available = False
+        if not self.redis_available:  # 如果之前已经判断 Redis 不可用
+            return False  # 直接返回 False，走内存兜底
+        try:  # ping 可能因为连接失败、认证失败、服务不可达而抛错
+            self.redis_client.ping()  # 发送 ping 检查 Redis 是否可连接
+            return True  # ping 成功表示 Redis 可用
+        except redis.RedisError as exc:  # 捕获 Redis 客户端异常
+            self.redis_available = False  # 标记为不可用，后续直接降级
             logger.warning("Redis 不可用，MemoryService 已降级为进程内临时记忆: url=%s error=%s", settings.redis_url, exc)
             return False
 
     @staticmethod
     def _session_key(user_id: int, character_id: int, conversation_id: int | None = None) -> str:
         """生成 Redis 中存储对话记忆的键名，格式：chat:session:用户ID:角色ID:会话ID"""
-        if conversation_id:
-            return f"chat:session:{user_id}:{character_id}:{conversation_id}"
-        return f"chat:session:{user_id}:{character_id}"
+        if conversation_id:  # 如果有会话 ID
+            return f"chat:session:{user_id}:{character_id}:{conversation_id}"  # 按用户+角色+会话隔离记忆
+        return f"chat:session:{user_id}:{character_id}"  # 兼容旧逻辑：只按用户+角色隔离
 
     def ensure_concurrent_role_slot(self, user_id: int, character_id: int) -> None:
         """
@@ -86,7 +86,7 @@ class MemoryService:
 
         # 第二步：检查当前角色是否已在活跃列表中
         data = self.redis_client.hgetall(key)  # 重新获取清理后的列表
-        sid = str(character_id)
+        sid = str(character_id)  # Redis hash field 使用字符串形式的角色 ID
         if sid in data:  # 如果当前角色已在列表中，更新活跃时间即可
             self.redis_client.hset(key, sid, str(now))
             self.redis_client.expire(key, int(idle * 4))  # 延长 Redis 键的过期时间
@@ -100,8 +100,8 @@ class MemoryService:
             )
 
         # 第四步：有空闲槽位，将新角色加入活跃列表
-        self.redis_client.hset(key, sid, str(now))
-        self.redis_client.expire(key, int(idle * 4))
+        self.redis_client.hset(key, sid, str(now))  # 写入新角色的最后活跃时间
+        self.redis_client.expire(key, int(idle * 4))  # 设置过期时间，长期不活跃自动清理
 
     def append_round(self, user_id: int, character_id: int, human: str, ai: str, conversation_id: int | None = None) -> None:
         """
@@ -110,15 +110,15 @@ class MemoryService:
         """
         key = self._session_key(user_id, character_id, conversation_id)
         if not self._redis_ok():
-            items = _fallback_sessions.setdefault(key, [])
-            items.extend([f"用户: {human}", f"AI: {ai}"])
-            del items[:-self.max_rounds * 2]
+            items = _fallback_sessions.setdefault(key, [])  # 获取或创建内存兜底列表
+            items.extend([f"用户: {human}", f"AI: {ai}"])  # 追加用户和 AI 两条消息
+            del items[:-self.max_rounds * 2]  # 只保留最后 max_rounds 轮，删除更早内容
             logger.info("Redis 降级模式：已写入临时记忆 key=%s rounds=%d", key, len(items) // 2)
             return
         with self.redis_client.pipeline() as pipe:  # 使用管道批量执行，提高性能
             pipe.rpush(key, f"用户: {human}", f"AI: {ai}")      # 追加到列表末尾
             pipe.ltrim(key, -self.max_rounds * 2, -1)             # 只保留最新的 N 轮
-            pipe.execute()
+            pipe.execute()  # 一次性执行 rpush 和 ltrim
 
     def get_recent_context(self, user_id: int, character_id: int, conversation_id: int | None = None) -> str:
         """
@@ -127,18 +127,18 @@ class MemoryService:
         """
         key = self._session_key(user_id, character_id, conversation_id)
         if not self._redis_ok():
-            items = _fallback_sessions.get(key, [])
-            summary = self.get_summary(user_id, character_id, conversation_id)
-            parts = []
-            if summary:
+            items = _fallback_sessions.get(key, [])  # 读取进程内临时记忆
+            summary = self.get_summary(user_id, character_id, conversation_id)  # 读取摘要
+            parts = []  # 保存最终拼接的上下文片段
+            if summary:  # 如果存在前文摘要
                 parts.append(f"[前文摘要] {summary}")
             parts.extend(items)
             logger.info("Redis 降级模式：读取临时记忆 key=%s rounds=%d summary=%s", key, len(items) // 2, bool(summary))
             return "\n".join(parts)
         items = self.redis_client.lrange(key, 0, -1)  # 获取所有对话记录
         summary = self.get_summary(user_id, character_id, conversation_id)  # 获取前文摘要
-        parts = []
-        if summary:
+        parts = []  # 保存摘要和最近对话
+        if summary:  # 有摘要时放在上下文前面
             parts.append(f"[前文摘要] {summary}")  # 摘要放在最前面
         parts.extend(items)  # 后面跟上最近的对话
         return "\n".join(parts)
@@ -146,9 +146,9 @@ class MemoryService:
     @staticmethod
     def _summary_key(user_id: int, character_id: int, conversation_id: int | None = None) -> str:
         """生成 Redis 中存储对话摘要的键名"""
-        if conversation_id:
-            return f"chat:summary:{user_id}:{character_id}:{conversation_id}"
-        return f"chat:summary:{user_id}:{character_id}"
+        if conversation_id:  # 如果有会话 ID
+            return f"chat:summary:{user_id}:{character_id}:{conversation_id}"  # 摘要按具体会话隔离
+        return f"chat:summary:{user_id}:{character_id}"  # 兼容旧逻辑：按用户+角色保存摘要
 
     def get_summary(self, user_id: int, character_id: int, conversation_id: int | None = None) -> str:
         """获取对话的前文摘要（由大模型自动生成的简短总结）"""
@@ -162,10 +162,10 @@ class MemoryService:
         """保存对话摘要到 Redis（带过期时间，过期后自动删除）"""
         key = self._summary_key(user_id, character_id, conversation_id)
         if not self._redis_ok():
-            _fallback_summaries[key] = summary
+            _fallback_summaries[key] = summary  # 写入进程内摘要兜底缓存
             logger.info("Redis 降级模式：已写入临时摘要 key=%s len=%d", key, len(summary))
             return
-        self.redis_client.set(key, summary, ex=settings.active_role_idle_seconds * 4)
+        self.redis_client.set(key, summary, ex=settings.active_role_idle_seconds * 4)  # 写入 Redis 并设置过期时间
 
     def get_round_count(self, user_id: int, character_id: int, conversation_id: int | None = None) -> int:
         """获取当前对话的轮数（Redis 列表长度 / 2，因为每轮包含一问一答两条记录）"""
@@ -174,4 +174,4 @@ class MemoryService:
             count = len(_fallback_sessions.get(key, [])) // 2
             logger.info("Redis 降级模式：读取临时轮数 key=%s count=%d", key, count)
             return count
-        return self.redis_client.llen(key) // 2
+        return self.redis_client.llen(key) // 2  # Redis 列表长度除以 2 得到对话轮数

@@ -1,4 +1,4 @@
-# Role-playing system based on RAG_new（项目结构详解）
+﻿# Role-playing system based on RAG_new（项目结构详解）
 
 1. ## 📂 项目结构详解（按功能分类）
 
@@ -217,7 +217,6 @@
 |    `llm_service.py`     | **大模型网关**：OpenAI 兼容流式/非流式调用、Query Rewrite 指代消解、对话总结 |
 |   `memory_service.py`   | **短期记忆服务**：Redis List 维护上下文，`LTRIM` 保留最近轮数；并发角色控制 |
 | `pdf_ingest_service.py` | **RAG 核心引擎**：PDF 解析、文本分块、SiliconFlow Embedding（LRU 缓存）、Milvus 写入、混合检索（ANN+BM25+RRF） |
-|    `rag_service.py`     | **RAG 封装层**：调用 `pdf_ingest_service` 检索，组装上下文片段，对外提供统一检索接口 |
 | `context_service.py`    | **上下文组装服务**：整合检索结果、记忆、实时上下文，生成 LLM prompt |
 | `graph_service.py`      | **知识图谱服务**：基于 `nx.MultiDiGraph` 构建实体关系图，支持子图检索（可选增强） |
 | `lightrag_service.py`   | **LightRAG 服务**：轻量级 RAG 增强，dual-mode 检索（local+global）（可选增强） |
@@ -270,3 +269,4 @@
 3. **提升系统吞吐**：参考 `tests/qps_test.py` 与 `tests/qps_retrieval.py` 压测结果，在 `services/llm_service.py` 中实现连接池复用，或部署本地 vLLM 替代远程 API；
 4. **修改前端界面**：在 `frontend/src/App.jsx` 中调整 SSE 事件处理、等待动画样式、对比模式布局；
 5. **添加新角色**：在 `db/models.py` 或通过后台接口添加新角色，上传 PDF 到 `uploads/` 后由 `pdf_ingest_service.py` 自动建 Collection（`character_knowledge_{id}`）并索引。
+

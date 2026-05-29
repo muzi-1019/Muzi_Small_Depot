@@ -31,6 +31,14 @@ _embed_cache: OrderedDict[str, list[float]] = OrderedDict()  # key 为文本摘�
 # ========== BM25 文档缓存（避免每次重新拉取 Milvus） ==========
 _bm25_cache: dict[int, dict] = {}  # character_id -> {rows, doc_tokens, avgdl, ts}
 
+# ========== 本地 Reranker 单例缓存（避免每次请求重复加载模型权重） ==========
+_local_reranker = None        # CrossEncoder 模型单例
+_local_reranker_path: str = ""  # 已加载模型的路径，路径变更时触发重新加载
+
+# ========== 本地 Embedder 单例缓存（避免每次请求重复加载模型权重） ==========
+_local_embedder = None        # SentenceTransformer 模型单例
+_local_embedder_path: str = ""  # 已加载模型的路径，路径变更时触发重新加载
+
 from app.core.config import settings  # 全局配置
 
 
@@ -123,7 +131,7 @@ class PDFIngestService:
         """
         try:  # 优先尝试使用 PyMuPDF，因为它支持文本、表格、图片和页面渲染等更多能力
             import fitz  # PyMuPDF
-        except ImportError:  # 如果当前环境没有安装 PyMuPDF，则退化为 pypdf 文本抽取
+        except ImportError:  # 如果当前环境没有安装 PyMuPDF 或者报错，则退化为 pypdf 文本抽取
             from pypdf import PdfReader  # 导入 pypdf 的 PDF 读取器
             reader = PdfReader(str(pdf_path))  # 打开 PDF 文件并创建读取对象
             return "\n".join(page.extract_text() or "" for page in reader.pages)  # 逐页提取文本并拼接返回
@@ -203,17 +211,23 @@ class PDFIngestService:
         if not base_url or not api_key:  # 如果缺少接口地址或密钥，就无法调用视觉模型
             return ""  # 返回空描述，保证图片理解失败不影响主入库流程
         mime = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg"}.get(ext, f"image/{ext}")  # 根据图片后缀映射 MIME 类型
-        # 根据图片后缀生成 MIME 类型，因为互联网媒体类型（MIME）有严格标准，图片格式必须使用规范的类型名
-        # PNG 标准是 image/png，JPEG 标准是 image/jpeg（不是 image/jpg）
-        # 直接使用 f"image/{ext}" 会产生 image/jpg（非标准），可能导致某些浏览器或 API 解析异常
+        # 大图（全页扫描可达 1800×2100）base64 后体积高达 5-8MB，会触发写超时；先压缩到 ≤1024px 再编码
+        try:
+            from PIL import Image as _PILImage
+            import io as _io
+            img = _PILImage.open(_io.BytesIO(image_bytes))
+            w, h = img.size
+            max_side = 1024
+            if max(w, h) > max_side:  # 仅在超过阈值时缩放，避免对小图二次编码损耗
+                scale = max_side / max(w, h)
+                img = img.resize((int(w * scale), int(h * scale)), _PILImage.LANCZOS)
+            buf = _io.BytesIO()
+            img.convert("RGB").save(buf, format="JPEG", quality=80)  # 转 JPEG 进一步压缩
+            image_bytes = buf.getvalue()
+            mime = "image/jpeg"
+        except Exception:
+            pass  # PIL 不可用或处理失败时使用原始图片
         b64 = base64.b64encode(image_bytes).decode("utf-8")  # 将图片二进制编码为 UTF-8 字符串
-        # HTTP/HTML/JSON 只能传输文本，不能直接传输二进制数据
-        # Base64 将二进制（8-bit bytes）编码为 ASCII 文本（A-Z、a-z、0-9、+、/）---（二进制安全传输）
-        # 传统方式：图片需要单独 HTTP 请求，浏览器要额外请求
-        # Data URL 方式：图片数据作为 HTML/CSS 的一部分，一次请求完成，可以 ---（减少 HTTP 请求次数）
-        # API 接口传输图片时，Base64 字符串可以放在 JSON 中 ---（便于数据交换）
-        # .b64encode() → 编码为 bytes / .decode("utf-8") → 转为字符串
-        # 接收方用 base64.b64decode(b64) 还原原始二进制 ---（编码和解码的可逆性）
 
         url = f"{base_url}/chat/completions"  # 构造视觉模型使用的聊天补全接口地址
         headers = {"Authorization": f"Bearer {api_key}"}  # 设置 Bearer Token 鉴权头
@@ -231,7 +245,8 @@ class PDFIngestService:
         }  # 完成请求体构造
         try:  # 调用外部视觉模型时要捕获异常，避免图片失败影响整个 PDF 入库
             import httpx  # HTTP 客户端库
-            with httpx.Client(timeout=8.0, trust_env=False) as client:  # 创建短超时客户端，避免图片描述长时间阻塞
+            _timeout = httpx.Timeout(connect=10.0, write=30.0, read=60.0, pool=5.0)  # 拆分超时：写 30s（大图上传），读 60s（模型推理）
+            with httpx.Client(timeout=_timeout, trust_env=False) as client:  # 创建客户端，分别设置写和读超时
                 resp = client.post(url, headers=headers, json=payload)  # 发送视觉模型请求
                 resp.raise_for_status()  # 非 2xx 状态码直接抛出异常
                 data = resp.json()  # 解析 JSON 响应
@@ -323,6 +338,9 @@ class PDFIngestService:
         选择 120 字符 overlap：
         - 约 15% 重叠率，能防止股东名称、金额、比例等关键信息刚好被切在边界；
         - 相比 0 重叠召回更稳，相比 300+ 重叠又不会明显放大 Milvus 存储和检索成本。
+        对比了 更粗粒度（1024/150） 和 更细粒度（512/80） 的分块策略：
+        1024/150：分块太大，会使语义稀释，不能更好的表达语义
+        512/80：分块太小，会让语义截断，让上下文不完整
         """
         cleaned = re.sub(r"\s+", " ", text).strip()  # 将连续空白、换行、制表符统一压缩为单个空格
         if not cleaned:  # 如果清洗后文本为空
@@ -608,9 +626,11 @@ class PDFIngestService:
         权重默认向量 0.6、关键词 0.4：
         - 角色问答多数是自然语言问题，向量应占主导；
         - 招股说明书又包含大量专有名词和数字，保留 0.4 BM25 可以提高事实类问题稳定性。
+        Neo4j 在这里的作用是：不参与 0.6/0.4 的“向量 + 关键词”加权公式，但会作为第三路结构化召回，额外把图谱关系片段加入候选集，
+        并影响最终排序，补充结构化关系，如果 Neo4j 返回的文本和已有 BM25/向量结果重复说明这个结果同时被图谱命中，更可信
         """
         # 导入 ThreadPoolExecutor，用于创建线程池，实现并行执行任务（提高检索效率）
-        from concurrent.futures import ThreadPoolExecutor  # 导入线程池，用于并发执行三路召回
+        from concurrent.futures import ThreadPoolExecutor  # 导入线程池，用于并发执行多路召回
         # 如果没有指定 top_k（返回的结果数量），则使用配置文件中的默认值
         if top_k is None:
             top_k = settings.retrieval_top_k
@@ -630,9 +650,9 @@ class PDFIngestService:
             # neo4j_top_k: 从配置中读取，控制 Neo4j 最多返回的关系条数
             neo4j_future = pool.submit(Neo4jGraphService().search_rows, character_id, query,max(top_k, settings.neo4j_top_k))  # 异步提交 Neo4j 图谱关系召回
             # 统一获取三路召回结果；result() 会等待对应任务完成
-            kw_rows = kw_future.result()  # 等待 BM25 召回完成并取回结果
-            vec_rows = vec_future.result()  # 等待向量召回完成并取回结果
-            neo4j_rows = neo4j_future.result()  # 等待 Neo4j 召回完成并取回结果
+            kw_rows = self._safe_retrieval_result(kw_future, "keyword")  # 等待 BM25 召回完成并取回结果
+            vec_rows = self._safe_retrieval_result(vec_future, "vector")  # 等待向量召回完成并取回结果
+            neo4j_rows = self._safe_retrieval_result(neo4j_future, "neo4j")  # 等待 Neo4j 召回完成并取回结果
         # 用 max(top_k, 8) 扩大召回量：多路各取足够候选，为后续融合和 rerank 留出冗余。
         # 并行执行：BM25、向量检索和 Neo4j 图谱检索互不依赖，可降低整体等待时间。
 
@@ -703,80 +723,108 @@ class PDFIngestService:
                 }  # 完成图谱候选写入
 
         # 按融合分数取候选集，再交给 rerank 模型做最终相关性排序。
+        # 注意：Neo4j 图谱结果的 hybrid_score 是固定分，容易在融合排序阶段排在向量结果前面。
+        # 因此这里扩大进入 rerank 的候选池，避免 Milvus 向量片段还没进入精排就被 Neo4j 挤掉。
         final_rows = sorted(merged.values(), key=lambda x: float(x.get("hybrid_score", 0.0)), reverse=True)  # 按融合分从高到低排序
-        candidates = final_rows[:max(top_k, settings.rerank_top_k)]  # 取足够多候选交给 rerank，避免过早截断
+        candidate_limit = max(top_k * 2, settings.rerank_top_k * 2, top_k + 4)  # 候选池收紧：减少 reranker 推理对数，降低 CPU 耗时
+        candidates = final_rows[:candidate_limit]  # 取足够多候选交给 rerank，避免过早截断
         logger.info("[Hybrid] merged=%d, candidates=%d (for rerank)", len(final_rows), len(candidates))  # 记录融合后和精排前候选数量
         for i, r in enumerate(candidates, 1):  # 遍历候选用于 debug 输出
             logger.debug("  [Fused %d] hybrid=%.4f method=%-8s text=%s...", i, float(r.get("hybrid_score", 0)), r.get("method", ""), str(r.get("text", ""))[:80])  # 输出融合候选摘要
         return self._rerank(query, candidates, top_n=top_k)  # 调用 rerank 精排并返回最终结果
 
+    @staticmethod
+    def _safe_retrieval_result(future, name: str) -> list[dict[str, object]]:
+        try:
+            rows = future.result()
+            return rows if isinstance(rows, list) else []
+        except Exception as exc:
+            logger.warning("[Hybrid] %s retrieval failed: %s", name, exc, exc_info=True)
+            return []
+
     def _rerank(self, query: str, rows: list[dict[str, object]], top_n: int | None = None) -> list[dict[str, object]]:
-        """调用 SiliconFlow rerank API 对候选文档重新精排。
-        失败时静默回退到混合检索分数排序，不阻塞主流程。
-        为什么在混合检索后再做 Rerank：
-        - 第一阶段检索强调“召回”，宁可多取一些候选，避免漏掉答案；
-        - Rerank 模型逐对判断“问题-片段”的相关性，比简单分数融合更接近真实问答需求；
-        - 相比直接让 LLM 在大量片段里找答案，Rerank 成本更低，也能减少上下文长度和幻觉风险。
-        这里保留 fallback，是因为 RAG 系统不能强依赖外部重排序 API；即使 Rerank 超时或失败，
-        仍可用 BM25+向量融合结果继续回答，保证可用性优先。
-        """
-        if not settings.rerank_enabled or not rows:  # 如果关闭 rerank 或没有候选
-            return rows[:top_n] if top_n else rows  # 直接返回原始候选
-        if top_n is None:  # 如果没有指定最终返回数量
-            top_n = settings.rerank_top_k  # 使用配置中的 rerank Top-K
+        """优先使用本地 bge-reranker-v2-m3 精排；本地不可用时回退到 SiliconFlow API；两者失败则回退融合分。"""
+        if not settings.rerank_enabled or not rows:
+            return rows[:top_n] if top_n else rows
+        if top_n is None:
+            top_n = settings.rerank_top_k
 
         valid_indices: list[int] = []
         documents: list[str] = []
-        # Rerank API 只接收非空文档；valid_indices 用来把 API 返回的 index 映射回原始 row。
-        for i, row in enumerate(rows):  # 遍历第一阶段候选
-            text = str(row.get("text", "")).strip()  # 取出候选文本并清理首尾空白
-            if text:  # 只保留非空文本
-                valid_indices.append(i)  # 保存该文本对应的原始 rows 下标
-                documents.append(text)  # 将文本加入 rerank 文档列表
+        for i, row in enumerate(rows):
+            text = str(row.get("text", "")).strip()
+            if text:
+                valid_indices.append(i)
+                documents.append(text)
 
-        if not documents:  # 如果没有任何可 rerank 的文档
-            return rows[:top_n]  # 回退返回前 top_n 条候选
+        if not documents:
+            return rows[:top_n]
 
-        base_url = (settings.openai_api_base or "").rstrip("/")  # 读取 rerank API 基础地址
-        api_key = settings.openai_api_key or ""  # 读取 API Key
-        if not base_url or not api_key:  # 如果缺少接口配置
-            logger.warning("Rerank skipped: missing API base or key")  # 记录跳过原因
-            return rows[:top_n]  # 回退使用融合分排序
+        return self._rerank_api(query, rows, valid_indices, documents, top_n)
 
-        try:  # 调用外部 rerank 服务时可能发生网络或接口异常
-            import httpx  # 导入 HTTP 客户端
-            url = f"{base_url}/rerank"  # 构造 rerank 接口地址
-            headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}  # 设置鉴权和 JSON 请求头
-            # 将第一阶段候选和原始 query 交给 rerank 模型，按 query-document 相关性重新排序。
+    @staticmethod
+    def _rerank_local(query: str, rows: list[dict[str, object]], valid_indices: list[int], documents: list[str], top_n: int, model_path: str) -> list[dict[str, object]]:
+        """使用本地 CrossEncoder（bge-reranker-v2-m3）对候选文档精排。
+        模型以单例形式缓存，首次调用时加载，后续直接复用，避免重复加载权重。
+        """
+        global _local_reranker, _local_reranker_path
+        if _local_reranker is None or _local_reranker_path != model_path:  # 首次或路径变更时重新加载
+            from sentence_transformers import CrossEncoder
+            logger.info("[Rerank] 加载本地模型: %s", model_path)
+            _local_reranker = CrossEncoder(model_path, max_length=512, local_files_only=True)  # 强制本地加载，不联网
+            _local_reranker_path = model_path
+            logger.info("[Rerank] 本地模型加载完成")
+        pairs = [(query, doc) for doc in documents]  # 构造 (问题, 文档) 配对输入
+        scores = _local_reranker.predict(pairs)  # 批量推理，返回每对的相关性得分
+        scored: list[dict[str, object]] = []
+        for doc_i, score in zip(valid_indices, scores):  # 把分数写回原始 row
+            row = dict(rows[doc_i])
+            row["rerank_score"] = float(score)
+            row["rerank_used"] = True
+            scored.append(row)
+        scored.sort(key=lambda x: float(x["rerank_score"]), reverse=True)  # 按相关性从高到低排序
+        result = scored[:top_n]
+        logger.info("[Rerank] 本地精排完成: input=%d, output=%d", len(documents), len(result))
+        for i, r in enumerate(result, 1):
+            logger.info("  [Rerank %d] score=%.4f text=%s...", i, float(r.get("rerank_score", 0)), str(r.get("text", ""))[:80])
+        return result
+
+    @staticmethod
+    def _rerank_api(query: str, rows: list[dict[str, object]], valid_indices: list[int], documents: list[str], top_n: int) -> list[dict[str, object]]:
+        base_url = (settings.openai_api_base or "").rstrip("/")
+        api_key = settings.openai_api_key or ""
+        if not base_url or not api_key:
+            logger.warning("Rerank skipped: missing API base or key")
+            return rows[:top_n]
+        try:
+            import httpx
+            url = f"{base_url}/rerank"
+            headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
             payload = {
-                "model": settings.rerank_model,  # 使用配置中的 rerank 模型
-                "query": query,  # 原始用户问题
-                "documents": documents,  # 第一阶段召回得到的候选文本列表
-                "top_n": min(top_n, len(documents)),  # 返回数量不能超过候选文档数量
-            }  # 完成 rerank 请求体
-            with httpx.Client(timeout=30.0, trust_env=False) as client:  # 创建 HTTP 客户端，关闭环境代理影响
-                resp = client.post(url, headers=headers, json=payload)  # 发送 rerank 请求
-                resp.raise_for_status()  # 接口返回非成功状态时抛异常
-                data = resp.json()  # 解析 JSON 响应
-
-            results = data.get("results", [])  # 获取 rerank 返回的排序结果
-            reranked: list[dict[str, object]] = []  # 保存重新排序后的 row
-            # API 返回的是 documents 内部下标，需要先转回 rows 的原始下标再保留元数据。
-            for r in results:  # 遍历 rerank 模型返回的结果项
-                doc_idx = r.get("index", 0)  # 获取该结果对应 documents 中的下标
-                if 0 <= doc_idx < len(valid_indices):  # 确保下标合法
-                    orig_idx = valid_indices[doc_idx]  # 将 documents 下标映射回 rows 原始下标
-                    row = dict(rows[orig_idx])  # 复制原始 row，避免直接修改输入对象
-                    row["rerank_score"] = r.get("relevance_score", 0.0)  # 写入 rerank 相关性分数
-                    row["method"] = "rerank"  # 标记最终排序来源为 rerank
-                    reranked.append(row)  # 加入最终结果列表
-            logger.info("[Rerank] done: input=%d, output=%d, model=%s", len(documents), len(reranked), settings.rerank_model)  # 记录 rerank 统计
-            for i, r in enumerate(reranked, 1):  # 遍历 rerank 后的结果用于日志展示
-                logger.info("  [Rerank %d] score=%.4f text=%s...", i, float(r.get("rerank_score", 0)), str(r.get("text", ""))[:80])  # 输出 rerank 排序摘要
-            return reranked  # 返回精排后的结果
-        except Exception as e:  # rerank 接口失败时进入回退逻辑
-            logger.warning("Rerank API failed, fallback to hybrid score: %s", e)  # 记录失败原因
-            return rows[:top_n]  # 回退到融合分排序结果
+                "model": settings.rerank_model,
+                "query": query,
+                "documents": documents,
+                "top_n": min(top_n, len(documents)),
+            }
+            with httpx.Client(timeout=30.0, trust_env=False) as client:
+                resp = client.post(url, headers=headers, json=payload)
+                resp.raise_for_status()
+                data = resp.json()
+            results = data.get("results", [])
+            reranked: list[dict[str, object]] = []
+            for r in results:
+                doc_idx = r.get("index", 0)
+                if 0 <= doc_idx < len(valid_indices):
+                    orig_idx = valid_indices[doc_idx]
+                    row = dict(rows[orig_idx])
+                    row["rerank_score"] = r.get("relevance_score", 0.0)
+                    row["rerank_used"] = True
+                    reranked.append(row)
+            logger.info("[Rerank] API done: input=%d, output=%d, model=%s", len(documents), len(reranked), settings.rerank_model)
+            return reranked
+        except Exception as e:
+            logger.warning("Rerank API failed, fallback to hybrid score: %s", e)
+            return rows[:top_n]
 
     @staticmethod
     def _prepare_embedding_input(text: str, max_chars: int) -> str:
@@ -786,13 +834,20 @@ class PDFIngestService:
         return prepared[:max_chars]  # 截断到指定最大字符数
 
     def _embed(self, text: str, *, use_cache: bool = True) -> list[float]:
-        """将文本转换为向量：优先查缓存 → 调用Embedding API → 退化为SHA256伪向量"""
+        """将文本转换为向量：优先查缓存 → 本地模型 → 调用Embedding API → 退化为SHA256伪向量"""
         embed_text = self._prepare_embedding_input(text, 1000)  # 使用 1000 字符版本作为缓存 key 的基础文本
         cache_key = hashlib.md5(embed_text.encode("utf-8")).hexdigest()  # 生成短哈希作为缓存键
-        # 相同文本片段重复检索时直接复用缓存，减少 embedding API 调用次数。
+        # 相同文本片段重复检索时直接复用缓存，减少模型调用次数。
         if use_cache and cache_key in _embed_cache:
             _embed_cache.move_to_end(cache_key)  # 刷新 LRU 顺序
             return _embed_cache[cache_key]
+        # 优先使用本地 bge-m3 模型，不依赖外部 API，速度稳定。
+        local_path = (settings.embedding_local_model_path or "").strip()
+        if local_path:
+            vec = self._embed_local(embed_text, local_path)
+            if vec:
+                self._cache_embed_result(cache_key, vec)
+                return vec
         base_url = (settings.openai_api_base or "").rstrip("/")  # 读取 embedding API 基础地址
         api_key = settings.openai_api_key or ""  # 读取 API Key
         if base_url and api_key:  # 只有配置齐全时才调用外部 embedding
@@ -830,6 +885,84 @@ class PDFIngestService:
             byte = digest[i % len(digest)]  # 循环使用 SHA256 摘要中的字节
             vector.append((byte / 255.0) * 2 - 1)  # 将字节值映射到 [-1, 1] 区间
         return vector  # 返回固定维度伪向量
+
+    @staticmethod
+    def _embed_local(text: str, model_path: str) -> list[float]:
+        """使用本地 bge-m3 生成 dense 向量。
+        优先走 onnx/ 子目录的 ONNX 模型（不依赖 PyTorch 版本）；
+        ONNX 不可用时尝试 SentenceTransformer（需要 safetensors 或 torch>=2.6）。
+        单例复用，避免重复加载权重。
+        """
+        global _local_embedder, _local_embedder_path
+        import numpy as np
+        from pathlib import Path as _Path
+
+        onnx_dir  = _Path(model_path) / "onnx"
+        onnx_file = onnx_dir / "model.onnx"
+
+        # ===== ONNX 路径：不依赖 PyTorch，安全尔快 =====
+        if onnx_file.exists():
+            try:
+                # 单例缓存 key 用 onnx_dir 路径，与 SentenceTransformer 单例共用 slot
+                onnx_key = str(onnx_file)
+                if _local_embedder is None or _local_embedder_path != onnx_key:
+                    import onnxruntime as ort
+                    from tokenizers import Tokenizer
+                    logger.info("[Embed] 加载 ONNX Embedding 模型: %s", onnx_file)
+                    sess_opts = ort.SessionOptions()
+                    sess_opts.intra_op_num_threads = 4
+                    # 关闭 arena 分配器，改用 OS 原生 allocator。
+                    # bge-m3 ONNX 权重文件 ~570MB，服务器运行时内存端片天起导致 arena bad allocation。
+                    sess_opts.enable_cpu_mem_arena = False
+                    sess_opts.enable_mem_pattern = False
+                    sess = ort.InferenceSession(
+                        str(onnx_file),
+                        sess_options=sess_opts,
+                        providers=["CPUExecutionProvider"],
+                    )
+                    tok  = Tokenizer.from_file(str(onnx_dir / "tokenizer.json"))
+                    tok.enable_truncation(max_length=512)
+                    tok.enable_padding()
+                    _local_embedder      = (sess, tok)  # 将 session 和 tokenizer 打包存入单例
+                    _local_embedder_path = onnx_key
+                    logger.info("[Embed] ONNX 模型加载完成")
+
+                sess, tok = _local_embedder  # type: ignore[misc]
+                enc  = tok.encode(text)
+                ids  = np.array([enc.ids],              dtype=np.int64)
+                mask = np.array([enc.attention_mask],   dtype=np.int64)
+                tids = np.zeros_like(ids)               # token_type_ids 全 0
+                input_names = {inp.name for inp in sess.get_inputs()}
+                feed = {"input_ids": ids, "attention_mask": mask}
+                if "token_type_ids" in input_names:
+                    feed["token_type_ids"] = tids
+                out     = sess.run(None, feed)           # out[0]: (1, seq_len, hidden)
+                hidden  = out[0][0]                      # (seq_len, hidden)
+                # mean pooling （忽略 padding 位）
+                m       = np.array(enc.attention_mask, dtype=np.float32)[:, None]
+                pooled  = (hidden * m).sum(axis=0) / (m.sum() + 1e-9)  # (hidden,)
+                norm    = np.linalg.norm(pooled)
+                if norm > 0:
+                    pooled = pooled / norm
+                return pooled.tolist()[:settings.milvus_dim]
+            except Exception as exc:
+                logger.warning("[Embed] ONNX 失败，尝试 SentenceTransformer: %r", exc)
+                _local_embedder      = None   # 重置单例，下次再试 ST
+                _local_embedder_path = ""
+
+        # ===== 回退： SentenceTransformer（需要 safetensors 或 torch>=2.6） =====
+        try:
+            if _local_embedder is None or _local_embedder_path != model_path:
+                from sentence_transformers import SentenceTransformer
+                logger.info("[Embed] 加载本地 SentenceTransformer: %s", model_path)
+                _local_embedder      = SentenceTransformer(model_path, trust_remote_code=True)
+                _local_embedder_path = model_path
+                logger.info("[Embed] SentenceTransformer 加载完成")
+            vec = _local_embedder.encode(text, normalize_embeddings=True).tolist()  # type: ignore[union-attr]
+            return vec[:settings.milvus_dim]
+        except Exception as exc:
+            logger.warning("[Embed] 本地模型全部失败，回退到 API: %r", exc)
+            return []
 
     def _cache_embed_result(self, cache_key: str, vec: list[float]) -> None:
         """将 embedding 结果存入 LRU 缓存"""
@@ -871,7 +1004,11 @@ class PDFIngestService:
             collection = Collection(coll_name)  # 复用已有 collection
         if need_create:  # 只有新建 collection 时需要创建索引
             # 使用 COSINE 度量与检索阶段保持一致；IVF_FLAT 是较简单稳定的近似检索索引。
-            index_params = {"metric_type": "COSINE", "index_type": "IVF_FLAT", "params": {"nlist": 128}}  # 定义向量索引参数
+            index_params = {"metric_type": "COSINE", "index_type": "IVF_FLAT", "params": {"nlist": 128}}  # 定义向量索引参数---基于倒排索引的近似最近邻（ANN）索引
+
+            # 优点：建索引快、召回率高、无精度损失（相比量化类索引如 IVF_PQ）。
+            # 缺点：搜索时计算量较大（需遍历 nprobe 个簇内的所有向量），内存占用较高（因存储原始向量）。
+
             collection.create_index(field_name="vector", index_params=index_params)  # 为 vector 字段创建索引
         collection.load()  # 加载 collection，确保后续插入和查询可用
         # Milvus insert 使用按字段组织的列式数据，因此需要把 rows 转成多列列表。

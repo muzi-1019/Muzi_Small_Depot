@@ -15,4 +15,5 @@ PyMuPDF
 rapidocr-onnxruntime
 Pillow
 jieba
+sentence-transformers
 pytest

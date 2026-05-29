@@ -8,7 +8,7 @@ RAG vs 纯LLM 对比评测脚本
 """
 
 import sys, os, time, json
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.core.config import settings
 from app.services.pdf_ingest_service import PDFIngestService

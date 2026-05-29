@@ -55,7 +55,7 @@ def stream_chat(
     return StreamingResponse(
         _safe_stream(),
         media_type="text/event-stream",              # SSE 内容类型
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},  # 禁用缓存和反向代理缓冲
+        headers={"Cache-Control": "no-cache, no-transform", "Connection": "keep-alive", "X-Accel-Buffering": "no"},  # 禁用缓存和反向代理缓冲
     )
 
 

@@ -14,7 +14,7 @@
 """
 
 import sys, os, time, json, re, math
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.core.config import settings
 from app.services.pdf_ingest_service import PDFIngestService
@@ -140,6 +140,27 @@ def eval_answer_relevancy(question: str, answer: str) -> float:
         return 0.5
 
 
+def eval_context_recall(question: str, answer: str, contexts: list[str]) -> float:
+    """上下文召回：回答中的关键信息有多少来自检索到的上下文？"""
+    if not contexts or not answer:
+        return 0.0
+    ctx = "\n".join(c[:300] for c in contexts[:5])
+    prompt = (
+        f"问题：{question}\n\n"
+        f"检索到的知识片段：\n{ctx}\n\n"
+        f"AI 回答：{answer[:500]}\n\n"
+        f"请判断 AI 回答中的关键信息，有多少比例能在知识片段中找到依据？\n"
+        f"评分标准：1.0=所有关键信息都来自片段，0.5=部分来自片段，0.0=完全找不到依据\n"
+        f"只输出一个 0 到 1 之间的数字，如：0.85"
+    )
+    result = llm_judge(prompt)
+    try:
+        score = float(re.search(r'[01]\.?\d*', result).group())
+        return min(max(score, 0.0), 1.0)
+    except Exception:
+        return 0.5
+
+
 def keyword_accuracy(answer: str, keywords: list[str]) -> float:
     """关键词命中率"""
     if not keywords:
@@ -221,6 +242,7 @@ def main():
             # 评估
             kw_acc = keyword_accuracy(res["answer"], item["gt_keywords"])
             ctx_prec = eval_context_precision(q, res["contexts"]) if res["contexts"] else 0.0
+            ctx_recall = eval_context_recall(q, res["answer"], res["contexts"]) if res["contexts"] else 0.0
             faith = eval_faithfulness(q, res["answer"], res["contexts"]) if res["contexts"] else 0.0
             ans_rel = eval_answer_relevancy(q, res["answer"])
 
@@ -228,12 +250,13 @@ def main():
                 **item, **res,
                 "keyword_accuracy": round(kw_acc, 2),
                 "context_precision": round(ctx_prec, 2),
+                "context_recall": round(ctx_recall, 2),
                 "faithfulness": round(faith, 2),
                 "answer_relevancy": round(ans_rel, 2),
                 "total_time": round(res["retrieve_time"] + res["llm_time"], 2),
             }
             all_results[mode].append(result)
-            print(f"  [{mode}] {result['total_time']}s | kw_acc={kw_acc:.0%} ctx_prec={ctx_prec:.0%} faith={faith:.0%} rel={ans_rel:.0%}")
+            print(f"  [{mode}] {result['total_time']}s | kw_acc={kw_acc:.0%} ctx_prec={ctx_prec:.0%} recall={ctx_recall:.0%} faith={faith:.0%} rel={ans_rel:.0%}")
 
     generate_report(all_results, modes)
     print(f"\n[DONE] 报告已生成: eval_comprehensive_report.md")
@@ -258,9 +281,10 @@ def generate_report(all_results: dict[str, list], modes: list[str]):
     lines += ["## 模式对比总览", "", "| 指标 | " + " | ".join(modes) + " |",
               "| --- | " + " | ".join(["---"] * len(modes)) + " |"]
 
-    metrics = ["keyword_accuracy", "context_precision", "faithfulness", "answer_relevancy", "total_time"]
+    metrics = ["keyword_accuracy", "context_precision", "context_recall", "faithfulness", "answer_relevancy", "total_time"]
     metric_names = {"keyword_accuracy": "关键词准确率", "context_precision": "上下文精度",
-                    "faithfulness": "忠实度", "answer_relevancy": "回答相关性", "total_time": "平均耗时(s)"}
+                    "context_recall": "上下文召回", "faithfulness": "忠实度",
+                    "answer_relevancy": "回答相关性", "total_time": "平均耗时(s)"}
 
     for metric in metrics:
         row = f"| {metric_names[metric]} |"
@@ -306,12 +330,14 @@ def generate_report(all_results: dict[str, list], modes: list[str]):
         results = all_results[mode]
         avg_kw = sum(r["keyword_accuracy"] for r in results) / len(results)
         avg_cp = sum(r["context_precision"] for r in results) / len(results)
+        avg_cr = sum(r["context_recall"] for r in results) / len(results)
         avg_f = sum(r["faithfulness"] for r in results) / len(results)
         avg_ar = sum(r["answer_relevancy"] for r in results) / len(results)
         avg_t = sum(r["total_time"] for r in results) / len(results)
         lines.append(f"### {mode}")
         lines.append(f"- 关键词准确率: **{avg_kw:.0%}**")
         lines.append(f"- 上下文精度: **{avg_cp:.0%}**")
+        lines.append(f"- 上下文召回: **{avg_cr:.0%}**")
         lines.append(f"- 忠实度: **{avg_f:.0%}**")
         lines.append(f"- 回答相关性: **{avg_ar:.0%}**")
         lines.append(f"- 平均耗时: **{avg_t:.1f}s**")

@@ -9,4 +9,4 @@ from sqlalchemy.orm import DeclarativeBase  # SQLAlchemy 提供的声明式基�
 
 class Base(DeclarativeBase):
     """所有数据库模型的基类，继承它的类会自动映射为数据库中的一张表"""
-    pass
+    pass  # 基类本身不定义字段，只作为所有 ORM 模型的共同父类

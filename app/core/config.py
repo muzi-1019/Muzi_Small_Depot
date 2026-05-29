@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     milvus_db: str = "default"                                                 # Milvus 中使用的数据库名
     milvus_collection: str = "character_knowledge"                             # Milvus 集合名前缀（每个角色独立集合：character_knowledge_{id}）
     milvus_enabled: bool = True                                                # 是否启用 Milvus 向量检索功能
-    milvus_dim: int = 1024                                                     # 向量维度，必须与 embedding 模型输出的维度一致（bge-large-zh-v1.5 输出 1024 维）
+    milvus_dim: int = 1024                                                     # 向量维度，必须与 embedding 模型输出的维度一致（bge-m3 dense 输出 1024 维）
     neo4j_enabled: bool = True                                                 # 是否启用 Neo4j 图谱关系召回，失败时自动跳过
     neo4j_uri: str = "bolt://localhost:7687"                                    # Neo4j Bolt 连接地址
     neo4j_user: str = "neo4j"                                                  # Neo4j 用户名
@@ -35,8 +35,9 @@ class Settings(BaseSettings):
     # ==================== 大模型 / AI 配置 ====================
     llm_provider: str = "mock"                                      # 大模型提供商：mock（模拟回复）/ siliconflow（硅基流动云端 API）/ openai 等
     llm_model_name: str = "mock-model"                              # 大模型的模型名称，如 deepseek-ai/DeepSeek-V3
-    embedding_model_name: str = "bge-small"                         # 文本向量化模型名称，用于把文字转换成数字向量以便检索
-    vision_model_name: str = "deepseek-ai/DeepSeek-OCR"
+    embedding_model_name: str = "BAAI/bge-large-zh-v1.5"             # Embedding API 使用的模型名称
+    embedding_local_model_path: str = ""                               # 本地 Embedding 模型路径，留空则使用 API（当前已禁用本地模型）
+    vision_model_name: str = "Qwen/Qwen3-VL-8B-Instruct"            # 调用Qwen3-vl-8b视觉模型
     openai_api_base: str = "https://api.openai.com/v1"              # 大模型 API 的基础地址（兼容 OpenAI 格式的接口地址）
     openai_api_key: str = ""                                        # 大模型 API 的密钥（鉴权用，类似密码）
     siliconflow_api_base: str = "https://api.siliconflow.cn/v1"     # 硅基流动平台的 API 地址（备用）
@@ -53,6 +54,7 @@ class Settings(BaseSettings):
     rerank_top_k: int = 5                      # 精排后保留 5 条进入上下文，兼顾答案依据充分和 prompt 长度可控
     rerank_enabled: bool = True                # 启用 SiliconFlow rerank API：比单纯分数融合更能判断“问题-片段”真实相关性
     rerank_model: str = "BAAI/bge-reranker-v2-m3"  # 多语言/中文效果较稳，适合中文招股说明书问答场景
+    rerank_local_model_path: str = ""                 # 本地 rerank 模型路径，留空则使用在线 API
     hybrid_vector_weight: float = 0.6          # 向量权重略高：自然语言问题常有同义改写，需要语义泛化能力
     hybrid_keyword_weight: float = 0.4         # 关键词权重保留 0.4：年份、金额、人名、股权比例等精确信息依赖词面匹配
     query_rewrite_enabled: bool = True         # 是否启用多轮对话 Query Rewriting（指代消解）
@@ -87,6 +89,23 @@ class Settings(BaseSettings):
     # 告诉 pydantic-settings：从 .env 文件读取配置，所有环境变量以 RAG_ 为前缀
     # 例如 .env 中 RAG_MYSQL_DSN=xxx 会自动赋值给上面的 mysql_dsn
     model_config = SettingsConfigDict(env_file=".env", env_prefix="RAG_")
+
+    def validate_runtime(self) -> None:
+        if self.app_env.lower() != "prod":
+            return
+        errors: list[str] = []
+        if self.app_debug:
+            errors.append("生产环境不能开启 RAG_APP_DEBUG")
+        if self.jwt_secret == "change-me-in-production" or len(self.jwt_secret) < 32:
+            errors.append("生产环境必须配置长度不少于 32 位的 RAG_JWT_SECRET")
+        if "*" in self.cors_allowed_origins:
+            errors.append("生产环境不能在 RAG_CORS_ALLOWED_ORIGINS 中使用 *")
+        if self.neo4j_enabled and self.neo4j_password in {"", "neo4j", "neo4j123"}:
+            errors.append("生产环境启用 Neo4j 时必须修改默认 RAG_NEO4J_PASSWORD")
+        if (self.llm_provider or "mock").lower() != "mock" and not self.openai_api_key:
+            errors.append("生产环境使用真实大模型时必须配置 RAG_OPENAI_API_KEY")
+        if errors:
+            raise RuntimeError("运行配置不安全：" + "；".join(errors))
 
 
 # 创建全局唯一的配置实例，其他文件导入这个 settings 对象即可使用所有配置

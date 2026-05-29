@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 本文件的作用：前端应用的主组件文件（React 单页应用的核心）。
  *
  * 整个前端界面都在这个文件中实现，包括：
@@ -72,19 +72,6 @@ function formatTime(iso) {
   if (!iso) return "";
   const d = new Date(iso);
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-}
-
-/** 把带图片的用户消息编码为可落库文本，刷新后可恢复缩略图 */
-function encodeUserMessageText(text, image = "") {
-  if (!image) return text;
-  return `${text || "[图片]"}\n[image:${image}]`;
-}
-
-/** 从历史消息文本中解析图片 dataURL */
-function decodeUserMessageText(text = "") {
-  const match = text.match(/\n?\[image:(data:image\/[^\]]+)\]$/);
-  if (!match) return { text, image: "" };
-  return { text: text.replace(match[0], "").trim() || "[图片]", image: match[1] };
 }
 
 /** 自定义 Hook：让 textarea 输入框根据内容自动调整高度（最大240px） */
@@ -356,7 +343,7 @@ class ChatErrorBoundary extends React.Component {
  * 包含三栏布局：左侧边栏（设置/角色）、中间聊天区域、右侧会话列表。
  * 支持流式聊天、会话管理、角色管理、知识库上传、消息搜索、管理员仪表盘等功能。
  */
-function ChatPage({ apiBase, setApiBase, status, checkHealth, userId, onLogout, characters, selectedCharacterId, setSelectedCharacterId, selectedCharacter, messages, loadingHistory, question, setQuestion, selectedImage, onSelectImage, onClearImage, onPasteImage, onDropImage, onReadClipboardImage, sendMessage, sendCompare, loadHistory, latestKnowledge, knowledgeList, busy, streaming, chatEndRef, conversations, activeConversationId, onCreateConversation, onSelectConversation, onDeleteConversation, onRenameConversation, onExportConversation, isAdmin, onCreateCharacter, onUpdateCharacter, onDeleteCharacter, onUploadDataset, darkMode, toggleDarkMode, onSearchMessages, fetchAdminStats, fetchAdminUsers, fetchAdminConversations, fetchAdminKnowledge }) {
+function ChatPage({ apiBase, setApiBase, status, checkHealth, userId, onLogout, characters, selectedCharacterId, setSelectedCharacterId, selectedCharacter, messages, loadingHistory, question, setQuestion, sendMessage, sendCompare, loadHistory, latestKnowledge, knowledgeList, busy, streaming, chatEndRef, conversations, activeConversationId, onCreateConversation, onSelectConversation, onDeleteConversation, onRenameConversation, onExportConversation, isAdmin, onCreateCharacter, onUpdateCharacter, onDeleteCharacter, onUploadDataset, darkMode, toggleDarkMode, onSearchMessages, fetchAdminStats, fetchAdminUsers, fetchAdminConversations, fetchAdminKnowledge }) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [showCharForm, setShowCharForm] = useState(false);
   const [charForm, setCharForm] = useState({ name: "", domain: "", persona: "", prompt_template: "" });
@@ -373,9 +360,10 @@ function ChatPage({ apiBase, setApiBase, status, checkHealth, userId, onLogout, 
   const [dashConvs, setDashConvs] = useState([]);
   const [dashKnowledge, setDashKnowledge] = useState([]);
   const datasetRef = useRef(null);
-  const chatImageRef = useRef(null);
   const [thinkingMs, setThinkingMs] = useState(0);
-  useEffect(() => { if (!streaming) { setThinkingMs(0); return; } setThinkingMs(0); const t = setInterval(() => setThinkingMs(s => s + 10), 10); return () => clearInterval(t); }, [streaming]);
+  const [waitingHint, setWaitingHint] = useState("");
+  const waitingHintTimersRef = useRef([]);
+  useEffect(() => { waitingHintTimersRef.current.forEach(clearTimeout); waitingHintTimersRef.current = []; if (!streaming) { setThinkingMs(0); setWaitingHint(""); return; } setThinkingMs(0); setWaitingHint(""); const t = setInterval(() => setThinkingMs(s => s + 10), 10); const hint = "正在进行检索，请稍等......"; const start = setTimeout(() => { [...hint].forEach((char, i) => { const timer = setTimeout(() => setWaitingHint(prev => prev + char), i * 550); waitingHintTimersRef.current.push(timer); }); }, 2000 + Math.random() * 1000); waitingHintTimersRef.current.push(start); return () => { clearInterval(t); waitingHintTimersRef.current.forEach(clearTimeout); waitingHintTimersRef.current = []; }; }, [streaming]);
   const searchTimerRef = useRef(null);
   const { textareaRef, resizeTextarea } = useAutoResizeTextarea();
   async function openDashboard() {
@@ -412,7 +400,7 @@ function ChatPage({ apiBase, setApiBase, status, checkHealth, userId, onLogout, 
   const leftSidebar = <aside className={`sidebar left-sidebar ${sidebarCollapsed ? "collapsed" : ""}`}><div className="sidebar-top"><button className="ghost icon-btn" onClick={() => setSidebarCollapsed((v) => !v)} aria-label={sidebarCollapsed ? "展开侧边栏" : "收起侧边栏"}><Icon name={sidebarCollapsed ? "menu" : "chevronLeft"} /></button><span className={`badge ${status === "在线" ? "ok" : "bad"}`}>{status}</span><button className="ghost icon-btn" onClick={toggleDarkMode} aria-label="切换主题"><Icon name={darkMode ? "sun" : "moon"} /></button></div>{!sidebarCollapsed ? <><div className="sidebar-header"><div className="brand"><h1>RAG Studio</h1><p>角色扮演知识工作台</p></div></div><div className="panel panel-compact"><div className="panel-title"><Icon name="user" /><span>账号</span></div><p className="meta">user_id: {userId}</p><button type="button" className="secondary full-btn" onClick={onLogout}>退出登录</button></div><div className="panel panel-compact"><div className="panel-title"><Icon name="role" /><span>角色</span></div><div className="char-list" style={{display:"flex",flexDirection:"column",gap:3,maxHeight:160,overflowY:"auto"}}>{characters.map((c) => <div key={c.id} className={`char-item${c.id===selectedCharacterId?" active":""}`} style={{display:"flex",alignItems:"center",gap:4,padding:"4px 6px",borderRadius:8,cursor:"pointer",fontSize:11,background:c.id===selectedCharacterId?"var(--accent, #2f66ff)":"transparent",color:c.id===selectedCharacterId?"#fff":"var(--text)"}} onClick={()=>setSelectedCharacterId(c.id)}><span style={{flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c.name} / {c.domain}</span>{c.id>3&&isAdmin&&<button className="conv-action-btn delete" style={{padding:"2px 5px",fontSize:10,flexShrink:0}} onClick={e=>{e.stopPropagation();if(confirm(`确定删除角色「${c.name}」？`))onDeleteCharacter(c.id);}}>删除</button>}</div>)}</div><p className="meta">{selectedCharacter?.persona || "暂无角色描述"}</p></div>{showCharForm && <div className="panel panel-compact" style={{animation:"panelEnter .25s"}}><div className="panel-title"><Icon name="edit" /><span>{editingCharId?"编辑角色":"新建角色"}</span></div><input placeholder="角色名称" value={charForm.name} onChange={e=>setCharForm(p=>({...p,name:e.target.value}))} style={{marginBottom:4}}/><input placeholder="领域（如：历史、心理学）" value={charForm.domain} onChange={e=>setCharForm(p=>({...p,domain:e.target.value}))} style={{marginBottom:4}}/><textarea placeholder="人设描述" rows={2} value={charForm.persona} onChange={e=>setCharForm(p=>({...p,persona:e.target.value}))} style={{marginBottom:4,fontSize:11}}/><textarea placeholder="提示模板（可选）" rows={2} value={charForm.prompt_template} onChange={e=>setCharForm(p=>({...p,prompt_template:e.target.value}))} style={{marginBottom:4,fontSize:11}}/><div style={{marginBottom:4}}><label style={{fontSize:11,color:"var(--text-secondary)"}}>数据集（可选，支持 txt/pdf/md/csv/json/jsonl）</label><input type="file" accept=".txt,.pdf,.md,.csv,.json,.jsonl" onChange={e=>setCharDatasetFile(e.target.files?.[0]||null)} style={{fontSize:11,marginTop:2}} /></div>{uploadProgress!==null&&<div style={{marginBottom:6}}><div style={{height:6,borderRadius:3,background:"var(--panel-border)",overflow:"hidden"}}><div style={{height:"100%",borderRadius:3,background:"linear-gradient(90deg,#2f66ff,#7aa1ff)",width:`${uploadProgress}%`,transition:"width .3s ease"}} /></div><span style={{fontSize:10,color:"var(--text-secondary)"}}>{uploadProgress<100?"上传清洗中…":"完成！"}</span></div>}<div style={{display:"flex",gap:4}}><button className="secondary full-btn" onClick={async()=>{if(!charForm.name.trim()){return;}let cid=editingCharId;if(editingCharId){await onUpdateCharacter(editingCharId,charForm);}else{const created=await onCreateCharacter({...charForm,role_type:"custom"});cid=created?.id;}if(charDatasetFile&&cid){setUploadProgress(10);const tick=setInterval(()=>setUploadProgress(p=>Math.min(p+8,90)),500);try{await onUploadDataset(cid,charDatasetFile);clearInterval(tick);setUploadProgress(100);setTimeout(()=>{setUploadProgress(null);setShowCharForm(false);setCharDatasetFile(null);},800);}catch{clearInterval(tick);setUploadProgress(null);}return;}setShowCharForm(false);setCharDatasetFile(null);}}>保存</button><button className="secondary full-btn" onClick={()=>{setShowCharForm(false);setCharDatasetFile(null);setUploadProgress(null);}}>取消</button></div></div>}<div className="panel panel-compact">{isAdmin && <><div className="panel-title"><Icon name="book" /><span>知识库</span></div><p className="meta">当前连接后端 API</p><div className="file-list">{knowledgeList.slice(0, 2).map((k) => <div key={k.id} className="file-item"><span>{k.original_filename}</span><em>{k.status}</em></div>)}</div>{isAdmin && <div style={{display:"flex",gap:"4px",marginTop:"6px",flexWrap:"wrap"}}><button className="conv-action-btn" onClick={()=>{setEditingCharId(null);setCharForm({name:"",domain:"",persona:"",prompt_template:""});setShowCharForm(true);}}>+ 新建角色</button>{selectedCharacter && <><button className="conv-action-btn" onClick={()=>{setEditingCharId(selectedCharacter?.id);setCharForm({name:selectedCharacter?.name,domain:selectedCharacter?.domain,persona:selectedCharacter?.persona,prompt_template:selectedCharacter?.prompt_template||""});setShowCharForm(true);}}>编辑</button><button className="conv-action-btn delete" onClick={()=>{if(confirm("确定删除该角色？"))onDeleteCharacter(selectedCharacter?.id);}}>删除</button><button className="conv-action-btn" onClick={()=>datasetRef.current?.click()}>上传数据集</button><input ref={datasetRef} type="file" accept=".txt,.pdf,.md,.csv,.json,.jsonl" hidden onChange={(e)=>{const f=e.target.files?.[0];if(f)onUploadDataset(selectedCharacter?.id,f);e.target.value="";}}/></>}</div>}</>}</div></> : <div className="drawer-strip"><button className="drawer-icon" onClick={() => setSidebarCollapsed(false)} aria-label="展开侧边栏"><Icon name="menu" /></button><button className="drawer-icon mini" onClick={checkHealth} aria-label="检测连接"><Icon name="refresh" /></button><button className="drawer-icon mini" onClick={onLogout} aria-label="退出登录"><Icon name="user" /></button></div>}</aside>;
   const renderConvList = (list) => list.map((item) => <ConversationItemCard key={item.id} item={item} isActive={item.id === activeConversationId} onSelect={onSelectConversation} onDelete={onDeleteConversation} onRename={onRenameConversation} />);
   const rightSidebar = <aside className="sidebar right-sidebar"><div className="sidebar-top"><span className="badge ok">会话</span></div><div className="panel panel-compact conversation-panel"><div className="panel-title"><Icon name="book" /><span>新对话</span></div><button type="button" className="full-btn new-chat-btn" onClick={onCreateConversation}>+ 新对话</button><div className="conversation-group-title"><span>最近会话</span><span>{recentConversations.length}</span></div><div className="conversation-list">{recentConversations.length === 0 ? <div className="conversation-empty">还没有保存的对话记录</div> : renderConvList(recentConversations)}</div>{olderConversations.length > 0 ? <><div className="conversation-group-title"><span>更早记录</span><span>{olderConversations.length}</span></div><div className="conversation-list">{renderConvList(olderConversations)}</div></> : null}</div></aside>;
-  return <div className={`layout ${sidebarCollapsed ? "collapsed" : ""}`} onPaste={onPasteImage} onDrop={onDropImage} onDragOver={(e)=>e.preventDefault()}>{leftSidebar}<main className="chat-main"><div className="chat-stack"><header className="chat-head"><div className="chat-head-left"><div className="avatar-mark">{selectedCharacter?.name?.slice(0, 1) || "R"}</div><div><h2>{selectedCharacter?.name || "未选择角色"}</h2><p>{selectedCharacter?.domain || "请选择角色开始会话"}</p></div></div><button className="secondary icon-text-btn" type="button" onClick={loadHistory}><Icon name="refresh" />刷新历史</button><button className="secondary icon-text-btn" type="button" onClick={onExportConversation}><Icon name="download" />导出</button><button className="secondary icon-text-btn" type="button" onClick={()=>setShowSearch(v=>!v)}><Icon name="search" />搜索</button>{isAdmin && <button className="secondary icon-text-btn" type="button" onClick={openDashboard}><Icon name="api" />仪表盘</button>}</header>{showSearch && <div className="search-overlay" style={{padding:"10px 18px",background:"var(--card-bg)",border:"1px solid var(--card-border)",borderRadius:16,animation:"panelEnter .2s"}}><div style={{display:"flex",gap:8,alignItems:"center"}}><input value={searchKeyword} onChange={e=>handleSearchInput(e.target.value)} placeholder="搜索历史消息…" style={{flex:1,marginTop:0}} autoFocus /><button className="ghost icon-btn" onClick={()=>{setShowSearch(false);setSearchKeyword("");setSearchResults([]);}}><Icon name="close" /></button></div>{searching && <p className="meta" style={{marginTop:6}}>搜索中…</p>}{!searching && searchResults.length > 0 && <div style={{maxHeight:240,overflowY:"auto",marginTop:6}}>{searchResults.map(r=><div key={r.message_id} className="conversation-item" style={{cursor:"pointer",marginBottom:4}} onClick={()=>{onSelectConversation(r.conversation_id);setShowSearch(false);setSearchKeyword("");setSearchResults([]);}}><div style={{fontSize:11,color:"var(--text-secondary)",marginBottom:2}}>会话 #{r.conversation_id} · {r.created_at?.slice(0,16)}</div><div style={{fontSize:12}}><strong>Q:</strong> {r.user_message?.slice(0,60)}</div><div style={{fontSize:11,color:"var(--text-secondary)"}}><strong>A:</strong> {r.ai_reply?.slice(0,80)}</div></div>)}</div>}{!searching && searchKeyword && searchResults.length === 0 && <p className="meta" style={{marginTop:6}}>无匹配结果</p>}</div>}<section className="chat-body"><div className="chat-scroll-area">{loadingHistory ? <div className="loading-stack"><div className="skeleton" /><div className="skeleton short" /><div className="skeleton" /></div> : messages.length === 0 ? <div className="empty empty-card">还没有消息，输入问题开始第一轮对话。</div> : messages.map((m, idx) => m.isCompare ? <article key={`${idx}-compare`} className="bubble assistant bubble-enter compare-bubble" style={{ animationDelay: `${Math.min(idx, 12) * 70}ms` }}><div className="bubble-top"><span className="bubble-role">RAG vs 纯LLM 对比</span><time>{formatTime(m.time)}</time></div><div className="compare-grid"><div className="compare-col"><div className="compare-label rag-label">RAG 回复（AI + 向量库检索）</div><p>{m.ragAnswer || (m.ragLoading ? "正在思考..." : "（无回复）")}</p>{m.ragSources && m.ragSources.length > 0 && <details className="sources-panel"><summary className="sources-summary">参考文献（{m.ragSources.length} 条）</summary><ol className="sources-list">{m.ragSources.map((s, si) => <li key={si} className="source-item"><div className="source-meta"><span className="source-file">{s.source_file}</span><span className="source-chunk">#{s.chunk_index}</span><span className="source-score">相似度 {(s.score * 100).toFixed(1)}%</span></div><div className="source-text">{(s.text || "").slice(0, 120)}…</div></li>)}</ol></details>}</div><div className="compare-col"><div className="compare-label llm-label">纯LLM 回复（无检索）</div><p>{m.llmAnswer || (m.llmLoading ? "正在思考..." : "（无回复）")}</p></div></div></article> : <article key={`${idx}-${m.role}`} className={`bubble ${m.role} bubble-enter`} style={{ animationDelay: `${Math.min(idx, 12) * 70}ms` }}><div className="bubble-top"><span className="bubble-role">{m.role === "assistant" ? (m.ragUsed ? "AI + 向量库检索" : "AI 回复") : "你"}</span><time>{formatTime(m.time)}</time></div>{m.image ? <img src={m.image} alt="用户上传图片" style={{maxWidth:220,maxHeight:180,borderRadius:12,display:"block",marginBottom:8,objectFit:"cover"}} /> : null}<p>{m.text || (m.role === "assistant" ? "正在思考(" + (thinkingMs / 1000).toFixed(2) + "s)" : "")}</p>{m.role === "assistant" && m.sources && m.sources.length > 0 && <details className="sources-panel"><summary className="sources-summary">参考文献（{m.sources.length} 条知识片段）</summary><ol className="sources-list">{m.sources.map((s, si) => <li key={si} className="source-item"><div className="source-meta"><span className="source-file" title={s.source_file}>{s.source_file}</span><span className="source-chunk">片段 #{s.chunk_index}</span><span className="source-score">相似度 {(s.score * 100).toFixed(1)}%</span></div><div className="source-text">{s.text?.length > 200 ? s.text.slice(0, 200) + "…" : s.text}</div></li>)}</ol></details>}</article>)}<div ref={chatEndRef} /></div></section><footer className="chat-foot"><div className="input-shell" style={{display:"flex",alignItems:"stretch",gap:10,padding:10,borderRadius:22,background:"rgba(255,255,255,.78)",boxShadow:"0 10px 28px rgba(47,102,255,.10)",border:"1px solid rgba(95,132,255,.16)"}}><input ref={chatImageRef} type="file" accept="image/*" style={{display:"none"}} onChange={onSelectImage} /><div style={{display:"flex",gap:8,alignItems:"stretch"}}><button type="button" className="secondary" style={{minWidth:72,height:52,borderRadius:16,padding:"0 12px",fontWeight:700}} onClick={()=>chatImageRef.current?.click()} disabled={busy || streaming}>上传</button><button type="button" className="secondary" style={{minWidth:72,height:52,borderRadius:16,padding:"0 12px",fontWeight:700}} onClick={onReadClipboardImage} disabled={busy || streaming}>粘贴</button></div>{selectedImage ? <div style={{display:"flex",alignItems:"center",gap:6,padding:"5px 7px",height:52,border:"1px solid rgba(95,132,255,.22)",borderRadius:16,background:"rgba(246,249,255,.9)",flexShrink:0}}><img src={selectedImage.data} alt="待发送图片" style={{width:40,height:40,objectFit:"cover",borderRadius:12}} /><button type="button" className="ghost icon-btn" onClick={onClearImage} title="移除图片"><Icon name="close" /></button></div> : null}<textarea ref={textareaRef} rows={1} value={question} onChange={(e) => { setQuestion(e.target.value); resizeTextarea(); }} onPaste={onPasteImage} placeholder="输入问题，支持粘贴/拖放图片（Enter 发送，Shift+Enter 换行）" onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); } }} style={{flex:1,minHeight:52,borderRadius:18,padding:"15px 18px",resize:"none",alignSelf:"stretch"}} /><button className="send-btn" style={{width:88,height:52,borderRadius:18,display:"flex",alignItems:"center",justifyContent:"center",gap:6,flexShrink:0,fontWeight:800}} disabled={busy || streaming} onClick={sendMessage}>{streaming ? "思考中" : <><span style={{width:18,height:18,display:"inline-flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Icon name="send" /></span><span>发送</span></>}</button></div></footer></div></main>{rightSidebar}{showDashboard && <div className="dashboard-overlay" style={{position:"fixed",inset:0,zIndex:999,background:"rgba(0,0,0,.45)",display:"grid",placeItems:"center"}} onClick={()=>setShowDashboard(false)}><div style={{background:"var(--card-bg)",border:"1px solid var(--card-border)",borderRadius:20,padding:24,width:"min(90vw,720px)",maxHeight:"80vh",overflowY:"auto",animation:"panelEnter .25s"}} onClick={e=>e.stopPropagation()}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}><h2 style={{margin:0}}>管理员仪表盘</h2><button className="ghost icon-btn" onClick={()=>setShowDashboard(false)}><Icon name="close" /></button></div>{dashStats && <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(120px,1fr))",gap:10,marginBottom:16}}>{[["用户",dashStats.total_users],["会话",dashStats.total_conversations],["消息",dashStats.total_messages],["角色",dashStats.total_characters],["知识库",dashStats.total_knowledge]].map(([label,val])=><div key={label} style={{background:"var(--panel-bg)",border:"1px solid var(--panel-border)",borderRadius:14,padding:"12px 14px",textAlign:"center"}}><div style={{fontSize:22,fontWeight:800,color:"#2f66ff"}}>{val}</div><div style={{fontSize:11,color:"var(--text-secondary)",marginTop:2}}>{label}</div></div>)}</div>}<div style={{marginBottom:12}}><h3 style={{margin:"0 0 6px",fontSize:14}}>用户列表</h3><div style={{maxHeight:140,overflowY:"auto"}}><table style={{width:"100%",fontSize:11,borderCollapse:"collapse"}}><thead><tr style={{textAlign:"left",color:"var(--text-secondary)"}}><th style={{padding:"3px 6px"}}>ID</th><th style={{padding:"3px 6px"}}>账号</th><th style={{padding:"3px 6px"}}>昵称</th><th style={{padding:"3px 6px"}}>注册时间</th></tr></thead><tbody>{dashUsers.map(u=><tr key={u.id} style={{borderTop:"1px solid var(--panel-border)"}}><td style={{padding:"3px 6px"}}>{u.id}</td><td style={{padding:"3px 6px"}}>{u.account}</td><td style={{padding:"3px 6px"}}>{u.nickname||"-"}</td><td style={{padding:"3px 6px"}}>{u.created_at?.slice(0,16)}</td></tr>)}</tbody></table></div></div><div style={{marginBottom:12}}><h3 style={{margin:"0 0 6px",fontSize:14}}>最近会话</h3><div style={{maxHeight:140,overflowY:"auto"}}><table style={{width:"100%",fontSize:11,borderCollapse:"collapse"}}><thead><tr style={{textAlign:"left",color:"var(--text-secondary)"}}><th style={{padding:"3px 6px"}}>ID</th><th style={{padding:"3px 6px"}}>用户</th><th style={{padding:"3px 6px"}}>标题</th><th style={{padding:"3px 6px"}}>更新</th></tr></thead><tbody>{dashConvs.map(c=><tr key={c.id} style={{borderTop:"1px solid var(--panel-border)"}}><td style={{padding:"3px 6px"}}>{c.id}</td><td style={{padding:"3px 6px"}}>{c.user_id}</td><td style={{padding:"3px 6px"}}>{c.title?.slice(0,20)||"-"}</td><td style={{padding:"3px 6px"}}>{c.updated_at?.slice(0,16)}</td></tr>)}</tbody></table></div></div><div><h3 style={{margin:"0 0 6px",fontSize:14}}>知识库文件</h3><div style={{maxHeight:140,overflowY:"auto"}}><table style={{width:"100%",fontSize:11,borderCollapse:"collapse"}}><thead><tr style={{textAlign:"left",color:"var(--text-secondary)"}}><th style={{padding:"3px 6px"}}>ID</th><th style={{padding:"3px 6px"}}>角色</th><th style={{padding:"3px 6px"}}>文件名</th><th style={{padding:"3px 6px"}}>状态</th></tr></thead><tbody>{dashKnowledge.map(k=><tr key={k.id} style={{borderTop:"1px solid var(--panel-border)"}}><td style={{padding:"3px 6px"}}>{k.id}</td><td style={{padding:"3px 6px"}}>{k.character_id}</td><td style={{padding:"3px 6px"}}>{k.original_filename?.slice(0,30)}</td><td style={{padding:"3px 6px"}}>{k.status}</td></tr>)}</tbody></table></div></div></div></div>}</div>;
+  return <div className={`layout ${sidebarCollapsed ? "collapsed" : ""}`}>{leftSidebar}<main className="chat-main"><div className="chat-stack"><header className="chat-head"><div className="chat-head-left"><div className="avatar-mark">{selectedCharacter?.name?.slice(0, 1) || "R"}</div><div><h2>{selectedCharacter?.name || "未选择角色"}</h2><p>{selectedCharacter?.domain || "请选择角色开始会话"}</p></div></div><button className="secondary icon-text-btn" type="button" onClick={loadHistory}><Icon name="refresh" />刷新历史</button><button className="secondary icon-text-btn" type="button" onClick={onExportConversation}><Icon name="download" />导出</button><button className="secondary icon-text-btn" type="button" onClick={()=>setShowSearch(v=>!v)}><Icon name="search" />搜索</button>{isAdmin && <button className="secondary icon-text-btn" type="button" onClick={openDashboard}><Icon name="api" />仪表盘</button>}</header>{showSearch && <div className="search-overlay" style={{padding:"10px 18px",background:"var(--card-bg)",border:"1px solid var(--card-border)",borderRadius:16,animation:"panelEnter .2s"}}><div style={{display:"flex",gap:8,alignItems:"center"}}><input value={searchKeyword} onChange={e=>handleSearchInput(e.target.value)} placeholder="搜索历史消息…" style={{flex:1,marginTop:0}} autoFocus /><button className="ghost icon-btn" onClick={()=>{setShowSearch(false);setSearchKeyword("");setSearchResults([]);}}><Icon name="close" /></button></div>{searching && <p className="meta" style={{marginTop:6}}>搜索中…</p>}{!searching && searchResults.length > 0 && <div style={{maxHeight:240,overflowY:"auto",marginTop:6}}>{searchResults.map(r=><div key={r.message_id} className="conversation-item" style={{cursor:"pointer",marginBottom:4}} onClick={()=>{onSelectConversation(r.conversation_id);setShowSearch(false);setSearchKeyword("");setSearchResults([]);}}><div style={{fontSize:11,color:"var(--text-secondary)",marginBottom:2}}>会话 #{r.conversation_id} · {r.created_at?.slice(0,16)}</div><div style={{fontSize:12}}><strong>Q:</strong> {r.user_message?.slice(0,60)}</div><div style={{fontSize:11,color:"var(--text-secondary)"}}><strong>A:</strong> {r.ai_reply?.slice(0,80)}</div></div>)}</div>}{!searching && searchKeyword && searchResults.length === 0 && <p className="meta" style={{marginTop:6}}>无匹配结果</p>}</div>}<section className="chat-body"><div className="chat-scroll-area">{loadingHistory ? <div className="loading-stack"><div className="skeleton" /><div className="skeleton short" /><div className="skeleton" /></div> : messages.length === 0 ? <div className="empty empty-card">还没有消息，输入问题开始第一轮对话。</div> : messages.map((m, idx) => m.isCompare ? <article key={`${idx}-compare`} className="bubble assistant bubble-enter compare-bubble" style={{ animationDelay: `${Math.min(idx, 12) * 70}ms` }}><div className="bubble-top"><span className="bubble-role">RAG vs 纯LLM 对比</span><time>{formatTime(m.time)}</time></div><div className="compare-grid"><div className="compare-col"><div className="compare-label rag-label">RAG 回复（AI + 向量库检索）</div><p>{m.ragAnswer || (m.ragLoading ? "正在思考..." : "（无回复）")}</p>{m.ragSources && m.ragSources.length > 0 && <details className="sources-panel"><summary className="sources-summary">参考文献（{m.ragSources.length} 条）</summary><ol className="sources-list">{m.ragSources.map((s, si) => <li key={si} className="source-item"><div className="source-meta"><span className="source-file">{s.source_file}</span><span className="source-chunk">#{s.chunk_index}</span><span className="source-score">相似度 {(s.score * 100).toFixed(1)}%</span></div><div className="source-text">{(s.text || "").slice(0, 120)}…</div></li>)}</ol></details>}</div><div className="compare-col"><div className="compare-label llm-label">纯LLM 回复（无检索）</div><p>{m.llmAnswer || (m.llmLoading ? "正在思考..." : "（无回复）")}</p></div></div></article> : <article key={`${idx}-${m.role}`} className={`bubble ${m.role} bubble-enter`} style={{ animationDelay: `${Math.min(idx, 12) * 70}ms` }}><div className="bubble-top"><span className="bubble-role">{m.role === "assistant" ? (m.ragUsed ? "AI + 向量库检索" : "AI 回复") : "你"}</span><time>{formatTime(m.time)}</time></div><p>{m.text || (m.role === "assistant" ? (waitingHint || "正在思考(" + (thinkingMs / 1000).toFixed(2) + "s)") : "")}</p>{m.role === "assistant" && m.sources && m.sources.length > 0 && <details className="sources-panel"><summary className="sources-summary">参考文献（{m.sources.length} 条知识片段）</summary><ol className="sources-list">{m.sources.map((s, si) => <li key={si} className="source-item"><div className="source-meta"><span className="source-file" title={s.source_file}>{s.source_file}</span><span className="source-chunk">片段 #{s.chunk_index}</span><span className="source-score">相似度 {(s.score * 100).toFixed(1)}%</span></div><div className="source-text">{s.text?.length > 200 ? s.text.slice(0, 200) + "…" : s.text}</div></li>)}</ol></details>}</article>)}<div ref={chatEndRef} /></div></section><footer className="chat-foot"><div className="input-shell"><textarea ref={textareaRef} rows={1} value={question} onChange={(e) => { setQuestion(e.target.value); resizeTextarea(); }} placeholder="输入你的问题，回车发送（Shift+Enter 换行）" onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); } }} /><button className="send-btn" disabled={busy || streaming} onClick={sendMessage}>{streaming ? "思考中..." : <><Icon name="send" />发送</>}</button></div></footer></div></main>{rightSidebar}{showDashboard && <div className="dashboard-overlay" style={{position:"fixed",inset:0,zIndex:999,background:"rgba(0,0,0,.45)",display:"grid",placeItems:"center"}} onClick={()=>setShowDashboard(false)}><div style={{background:"var(--card-bg)",border:"1px solid var(--card-border)",borderRadius:20,padding:24,width:"min(90vw,720px)",maxHeight:"80vh",overflowY:"auto",animation:"panelEnter .25s"}} onClick={e=>e.stopPropagation()}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}><h2 style={{margin:0}}>管理员仪表盘</h2><button className="ghost icon-btn" onClick={()=>setShowDashboard(false)}><Icon name="close" /></button></div>{dashStats && <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(120px,1fr))",gap:10,marginBottom:16}}>{[["用户",dashStats.total_users],["会话",dashStats.total_conversations],["消息",dashStats.total_messages],["角色",dashStats.total_characters],["知识库",dashStats.total_knowledge]].map(([label,val])=><div key={label} style={{background:"var(--panel-bg)",border:"1px solid var(--panel-border)",borderRadius:14,padding:"12px 14px",textAlign:"center"}}><div style={{fontSize:22,fontWeight:800,color:"#2f66ff"}}>{val}</div><div style={{fontSize:11,color:"var(--text-secondary)",marginTop:2}}>{label}</div></div>)}</div>}<div style={{marginBottom:12}}><h3 style={{margin:"0 0 6px",fontSize:14}}>用户列表</h3><div style={{maxHeight:140,overflowY:"auto"}}><table style={{width:"100%",fontSize:11,borderCollapse:"collapse"}}><thead><tr style={{textAlign:"left",color:"var(--text-secondary)"}}><th style={{padding:"3px 6px"}}>ID</th><th style={{padding:"3px 6px"}}>账号</th><th style={{padding:"3px 6px"}}>昵称</th><th style={{padding:"3px 6px"}}>注册时间</th></tr></thead><tbody>{dashUsers.map(u=><tr key={u.id} style={{borderTop:"1px solid var(--panel-border)"}}><td style={{padding:"3px 6px"}}>{u.id}</td><td style={{padding:"3px 6px"}}>{u.account}</td><td style={{padding:"3px 6px"}}>{u.nickname||"-"}</td><td style={{padding:"3px 6px"}}>{u.created_at?.slice(0,16)}</td></tr>)}</tbody></table></div></div><div style={{marginBottom:12}}><h3 style={{margin:"0 0 6px",fontSize:14}}>最近会话</h3><div style={{maxHeight:140,overflowY:"auto"}}><table style={{width:"100%",fontSize:11,borderCollapse:"collapse"}}><thead><tr style={{textAlign:"left",color:"var(--text-secondary)"}}><th style={{padding:"3px 6px"}}>ID</th><th style={{padding:"3px 6px"}}>用户</th><th style={{padding:"3px 6px"}}>标题</th><th style={{padding:"3px 6px"}}>更新</th></tr></thead><tbody>{dashConvs.map(c=><tr key={c.id} style={{borderTop:"1px solid var(--panel-border)"}}><td style={{padding:"3px 6px"}}>{c.id}</td><td style={{padding:"3px 6px"}}>{c.user_id}</td><td style={{padding:"3px 6px"}}>{c.title?.slice(0,20)||"-"}</td><td style={{padding:"3px 6px"}}>{c.updated_at?.slice(0,16)}</td></tr>)}</tbody></table></div></div><div><h3 style={{margin:"0 0 6px",fontSize:14}}>知识库文件</h3><div style={{maxHeight:140,overflowY:"auto"}}><table style={{width:"100%",fontSize:11,borderCollapse:"collapse"}}><thead><tr style={{textAlign:"left",color:"var(--text-secondary)"}}><th style={{padding:"3px 6px"}}>ID</th><th style={{padding:"3px 6px"}}>角色</th><th style={{padding:"3px 6px"}}>文件名</th><th style={{padding:"3px 6px"}}>状态</th></tr></thead><tbody>{dashKnowledge.map(k=><tr key={k.id} style={{borderTop:"1px solid var(--panel-border)"}}><td style={{padding:"3px 6px"}}>{k.id}</td><td style={{padding:"3px 6px"}}>{k.character_id}</td><td style={{padding:"3px 6px"}}>{k.original_filename?.slice(0,30)}</td><td style={{padding:"3px 6px"}}>{k.status}</td></tr>)}</tbody></table></div></div></div></div>}</div>;
 }
 
 /**
@@ -428,7 +416,6 @@ export default function App() {
   const [characters, setCharacters] = useState([]);
   const [selectedCharacterId, setSelectedCharacterId] = useState(0);
   const [question, setQuestion] = useState("");
-  const [selectedImage, setSelectedImage] = useState(null);
   const [messages, setMessages] = useState([]);
   const [knowledgeList, setKnowledgeList] = useState([]);
   const [latestKnowledge, setLatestKnowledge] = useState([]);
@@ -467,31 +454,6 @@ export default function App() {
     );
   }, [token, userId]);
   useEffect(() => { if (activeConversationId) localStorage.setItem("active_conversation_id", String(activeConversationId)); }, [activeConversationId]);
-  useEffect(() => {
-    if (!token || !userId) return;
-    const handlePaste = (event) => { onPasteChatImage(event); };
-    const preventImageOpen = (event) => {
-      if (Array.from(event.dataTransfer?.files || []).some((file) => file.type.startsWith("image/"))) event.preventDefault();
-    };
-    const handleDrop = (event) => {
-      if (Array.from(event.dataTransfer?.files || []).some((file) => file.type.startsWith("image/"))) onDropChatImage(event);
-    };
-    window.addEventListener("paste", handlePaste);
-    const handleKeyDown = (event) => {
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "v") {
-        readImageFromClipboard();
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    window.addEventListener("dragover", preventImageOpen);
-    window.addEventListener("drop", handleDrop);
-    return () => {
-      window.removeEventListener("paste", handlePaste);
-      window.removeEventListener("keydown", handleKeyDown);
-      window.removeEventListener("dragover", preventImageOpen);
-      window.removeEventListener("drop", handleDrop);
-    };
-  }, [token, userId]);
 
   /** 拼接完整的 API URL（如果设置了自定义 API 地址则使用之） */
   function apiUrl(path) {
@@ -668,7 +630,7 @@ export default function App() {
     setLoadingHistory(true);
     try {
       const data = await requestJson(apiUrl(`/api/chat/history?user_id=${userId}&conversation_id=${conversationId}&limit=50`), {}, token);
-      const history = (data?.data || []).flatMap((item) => { const parsed = decodeUserMessageText(item.user_message); return [{ role: "user", text: parsed.text, image: parsed.image, time: item.created_at }, { role: "assistant", text: item.ai_reply, time: item.created_at, ragUsed: !!item.rag_used, sources: item.sources || [] }]; });
+      const history = (data?.data || []).flatMap((item) => [{ role: "user", text: item.user_message, time: item.created_at }, { role: "assistant", text: item.ai_reply, time: item.created_at, ragUsed: !!item.rag_used, sources: item.sources || [] }]);
       setMessages(history);
       return history;
     } catch (e) {
@@ -720,84 +682,14 @@ export default function App() {
     setConversations((prev) => prev.map((item) => item.id === conversationId ? { ...item, preview: lastText, updatedAt: now, updatedAtLabel: formatTime(now), title: item.title || (lastText ? lastText.slice(0, 18) : "新对话") } : item));
   }
 
-  /** 读取图片文件：支持文件选择、剪贴板粘贴、拖放三种来源 */
-  function setChatImageFromFile(file, name = "图片") {
-    if (!file) return false;
-    if (!file.type.startsWith("image/")) { setToast("请选择图片文件"); return false; }
-    if (file.size > 4 * 1024 * 1024) { setToast("图片不能超过 4MB"); return false; }
-    const reader = new FileReader();
-    reader.onload = () => setSelectedImage({ data: String(reader.result || ""), mime: file.type, name: file.name || name });
-    reader.onerror = () => setToast("图片读取失败");
-    reader.readAsDataURL(file);
-    return true;
-  }
-
-  /** 选择聊天图片：读取为 dataURL，随下一条消息发送给后端解析 */
-  function onSelectChatImage(event) {
-    const file = event.target.files?.[0];
-    setChatImageFromFile(file, file?.name || "上传图片");
-    event.target.value = "";
-  }
-
-  function clearSelectedImage() {
-    setSelectedImage(null);
-  }
-
-  /** 从系统剪贴板主动读取图片：兼容部分浏览器复制网页图片/截图时 clipboardData 为空的情况 */
-  async function readImageFromClipboard() {
-    if (!navigator.clipboard?.read) return false;
-    try {
-      const items = await navigator.clipboard.read();
-      for (const item of items) {
-        const imageType = item.types.find((type) => type.startsWith("image/"));
-        if (!imageType) continue;
-        const blob = await item.getType(imageType);
-        const file = new File([blob], "粘贴图片", { type: imageType });
-        return setChatImageFromFile(file, "粘贴图片");
-      }
-    } catch (err) {
-      console.warn("读取剪贴板图片失败", err);
-      setToast("浏览器未允许读取剪贴板图片，请点击粘贴图片按钮后选择允许");
-      return false;
-    }
-    setToast("剪贴板里没有可读取的图片，请先复制截图或图片");
-    return false;
-  }
-
-  /** 在聊天框/聊天页面粘贴截图/图片：兼容 clipboardData.files、clipboardData.items 和 Clipboard API */
-  async function onPasteChatImage(event) {
-    const files = Array.from(event.clipboardData?.files || []);
-    const fileFromFiles = files.find((file) => file.type.startsWith("image/"));
-    const items = Array.from(event.clipboardData?.items || []);
-    const imageItem = items.find((item) => item.type.startsWith("image/"));
-    const file = fileFromFiles || imageItem?.getAsFile();
-    if (file) {
-      event.preventDefault();
-      setChatImageFromFile(file, "粘贴图片");
-      return;
-    }
-    const ok = await readImageFromClipboard();
-    if (ok) event.preventDefault();
-  }
-
-  /** 拖放图片到聊天区域：阻止浏览器默认打开图片文件 */
-  function onDropChatImage(event) {
-    event.preventDefault();
-    const file = Array.from(event.dataTransfer?.files || []).find((item) => item.type.startsWith("image/"));
-    if (!file) return;
-    setChatImageFromFile(file, file.name || "拖放图片");
-  }
-
   /** 发送消息：通过 SSE 流式接收 AI 回复（打字机效果） */
   async function sendMessage() {
-    if (!userId || !selectedCharacterId || (!question.trim() && !selectedImage) || busy || streaming) return;
+    if (!userId || !selectedCharacterId || !question.trim() || busy || streaming) return;
     const prompt = question.trim();
-    const imageToSend = selectedImage;
-    const userMessage = { role: "user", text: prompt || "[图片]", image: imageToSend?.data || "", time: new Date().toISOString() };
+    const userMessage = { role: "user", text: prompt, time: new Date().toISOString() };
     try {
       setBusy(true);
       setQuestion("");
-      setSelectedImage(null);
       setMessages((prev) => [...prev, userMessage]);
       setStreaming(true);
       const assistantMessage = { role: "assistant", text: "", time: new Date().toISOString() };
@@ -806,8 +698,7 @@ export default function App() {
       let conversationId = activeConversationId;
       let ragUsed = false;
       const coords = userCoordsRef.current || {};
-      const storedPrompt = encodeUserMessageText(prompt, imageToSend?.data || "");
-      const body = JSON.stringify({ user_id: userId, character_id: Number(selectedCharacterId), question: storedPrompt, conversation_id: conversationId || 0, latitude: coords.latitude || null, longitude: coords.longitude || null, image_data: imageToSend?.data || null, image_mime: imageToSend?.mime || null });
+      const body = JSON.stringify({ user_id: userId, character_id: Number(selectedCharacterId), question: prompt, conversation_id: conversationId || 0, latitude: coords.latitude || null, longitude: coords.longitude || null });
       const headers = { "Content-Type": "application/json" };
       if (token) headers.Authorization = `Bearer ${token}`;
       const response = await fetch(apiUrl("/api/chat"), { method: "POST", headers, body });
@@ -1036,5 +927,7 @@ export default function App() {
   useEffect(() => { const link = document.querySelector("link[rel='icon']"); if (link) link.href = (!token || !userId) ? "/favicon-login.svg" : "/favicon-chat.svg"; document.title = (!token || !userId) ? "RAG 角色扮演系统 - 登录" : "RAG 角色扮演系统"; }, [token, userId]);
 
   if (!token || !userId) return <AuthPage onLogin={onLogin} onRegister={onRegister} />;
-  return <><ChatErrorBoundary><ChatPage apiBase={apiBase} setApiBase={setApiBase} status={status} checkHealth={checkHealth} userId={userId} onLogout={onLogout} characters={characters} selectedCharacterId={selectedCharacterId} setSelectedCharacterId={setSelectedCharacterId} selectedCharacter={selectedCharacter} messages={messages} loadingHistory={loadingHistory} question={question} setQuestion={setQuestion} selectedImage={selectedImage} onSelectImage={onSelectChatImage} onClearImage={clearSelectedImage} onPasteImage={onPasteChatImage} onDropImage={onDropChatImage} onReadClipboardImage={readImageFromClipboard} sendMessage={sendMessage} sendCompare={sendCompare} loadHistory={loadHistory} latestKnowledge={latestKnowledge} knowledgeList={knowledgeList} busy={busy} streaming={streaming} chatEndRef={chatEndRef} conversations={conversations} activeConversationId={activeConversationId} onCreateConversation={onCreateConversation} onSelectConversation={onSelectConversation} onDeleteConversation={onDeleteConversation} onRenameConversation={onRenameConversation} onExportConversation={onExportConversation} isAdmin={isAdmin} onCreateCharacter={onCreateCharacter} onUpdateCharacter={onUpdateCharacter} onDeleteCharacter={onDeleteCharacter} onUploadDataset={onUploadDataset} darkMode={darkMode} toggleDarkMode={toggleDarkMode} onSearchMessages={onSearchMessages} fetchAdminStats={fetchAdminStats} fetchAdminUsers={fetchAdminUsers} fetchAdminConversations={fetchAdminConversations} fetchAdminKnowledge={fetchAdminKnowledge} /></ChatErrorBoundary>{toast ? <div className="toast">{toast}</div> : null}</>;
+  return <><ChatErrorBoundary><ChatPage apiBase={apiBase} setApiBase={setApiBase} status={status} checkHealth={checkHealth} userId={userId} onLogout={onLogout} characters={characters} selectedCharacterId={selectedCharacterId} setSelectedCharacterId={setSelectedCharacterId} selectedCharacter={selectedCharacter} messages={messages} loadingHistory={loadingHistory} question={question} setQuestion={setQuestion} sendMessage={sendMessage} loadHistory={loadHistory} latestKnowledge={latestKnowledge} knowledgeList={knowledgeList} busy={busy} streaming={streaming} chatEndRef={chatEndRef} conversations={conversations} activeConversationId={activeConversationId} onCreateConversation={onCreateConversation} onSelectConversation={onSelectConversation} onDeleteConversation={onDeleteConversation} onRenameConversation={onRenameConversation} onExportConversation={onExportConversation} isAdmin={isAdmin} onCreateCharacter={onCreateCharacter} onUpdateCharacter={onUpdateCharacter} onDeleteCharacter={onDeleteCharacter} onUploadDataset={onUploadDataset} darkMode={darkMode} toggleDarkMode={toggleDarkMode} onSearchMessages={onSearchMessages} fetchAdminStats={fetchAdminStats} fetchAdminUsers={fetchAdminUsers} fetchAdminConversations={fetchAdminConversations} fetchAdminKnowledge={fetchAdminKnowledge} /></ChatErrorBoundary>{toast ? <div className="toast">{toast}</div> : null}</>;
 }
+
+

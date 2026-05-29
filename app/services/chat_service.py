@@ -16,6 +16,7 @@
 
 import json                          # JSON 序列化工具
 import logging                       # 日志
+import os                             # 路径处理，用于从 stored_path 提取文件名
 import re                            # 正则表达式，用于屏蔽词匹配
 import time                          # 时间控制，用于等待动画
 from collections.abc import Generator  # 生成器类型注解
@@ -63,7 +64,6 @@ class ChatService:
         完整流程：验证用户/角色 → 检查槽位 → 管理会话 → 检查屏蔽词 → 获取记忆 → RAG检索 → 获取实时上下文 → 调用大模型 → 保存消息
         """
         logger.info("chat request start stream=%s user_id=%s character_id=%s conversation_id=%s has_image=%s question_len=%d", False, payload.user_id, payload.character_id, payload.conversation_id, bool(payload.image_data), len(payload.question or ""))
-        logger.info("chat request start stream=%s user_id=%s character_id=%s conversation_id=%s has_image=%s question_len=%d", True, payload.user_id, payload.character_id, payload.conversation_id, bool(payload.image_data), len(payload.question or ""))
         user = self.user_repository.get_by_id(payload.user_id)
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
@@ -77,35 +77,35 @@ class ChatService:
         display_question = self._display_question(payload)
         image_context = ImageUnderstandingService.analyze(payload.image_data, payload.image_mime)
         logger.info("chat image context ready user_id=%s character_id=%s context_len=%d", payload.user_id, payload.character_id, len(image_context))
-        conv_id = payload.conversation_id
-        if conv_id:
-            conv = self.conversation_repository.get_by_id(conv_id)
-            if not conv or conv.user_id != payload.user_id:
+        conv_id = payload.conversation_id  # 读取前端传入的会话 ID
+        if conv_id:  # 如果前端指定了已有会话
+            conv = self.conversation_repository.get_by_id(conv_id)  # 查询会话
+            if not conv or conv.user_id != payload.user_id:  # 会话不存在或不属于当前用户
                 raise HTTPException(status_code=404, detail="Conversation not found")
         else:
-            conv = self.conversation_repository.create_conversation(
+            conv = self.conversation_repository.create_conversation(  # 没有会话 ID 时创建新会话
                 payload.user_id, payload.character_id, title=display_question[:18] or "新对话"
             )
-            conv_id = conv.id
+            conv_id = conv.id  # 保存新会话 ID
 
-        rag_used = False
-        sources: list[dict[str, object]] = []
-        if self._contains_blocked_word(payload.question):
+        rag_used = False  # 标记本次回答是否使用了 RAG 上下文
+        sources: list[dict[str, object]] = []  # 保存检索来源元数据
+        if self._contains_blocked_word(payload.question):  # 用户问题命中屏蔽词时直接拒答
             answer = "抱歉，我无法回答这个问题。"
         else:
-            try:
+            try:  # 获取记忆可能因 Redis 故障失败，需要兜底
                 memory = self.memory_service.get_recent_context(payload.user_id, payload.character_id, conv_id)
             except Exception as exc:
                 logger.error("get memory failed user_id=%s character_id=%s conversation_id=%s: %s", payload.user_id, payload.character_id, conv_id, exc, exc_info=True)
-                memory = ""
-            retrieval_query = self.llm_service.rewrite_query(payload.question, memory) if settings.query_rewrite_enabled else payload.question
-            if getattr(payload, 'force_no_rag', False):
-                context, sources = "", []
+                memory = ""  # 记忆读取失败时使用空记忆继续对话
+            retrieval_query = self.llm_service.rewrite_query(payload.question, memory) if settings.query_rewrite_enabled else payload.question  # 可选 query rewrite
+            if getattr(payload, 'force_no_rag', False):  # 如果前端要求禁用 RAG
+                context, sources = "", []  # 不检索知识库
             else:
-                context, sources = self._retrieve_context(payload.character_id, retrieval_query)
-            rag_used = bool(context.strip())
-            realtime_ctx = ContextService.get_realtime_context(client_ip, payload.latitude, payload.longitude)
-            llm_question = self._question_with_image_context(payload.question, image_context)
+                context, sources = self._retrieve_context(payload.character_id, retrieval_query)  # 检索 RAG 上下文
+            rag_used = bool(context.strip())  # 有非空上下文则认为使用了 RAG
+            realtime_ctx = ContextService.get_realtime_context(client_ip, payload.latitude, payload.longitude)  # 获取时间/天气等实时上下文
+            llm_question = self._question_with_image_context(payload.question, image_context)  # 将图片解析结果拼入问题
             answer = self.llm_service.generate(
                 character=character,
                 question=llm_question,
@@ -132,11 +132,11 @@ class ChatService:
         except Exception as exc:
             logger.error("append memory failed user_id=%s character_id=%s conversation_id=%s: %s", payload.user_id, payload.character_id, conv_id, exc, exc_info=True)
 
-        self._maybe_summarize(payload.user_id, payload.character_id, conv_id)
+        self._maybe_summarize(payload.user_id, payload.character_id, conv_id)  # 达到阈值时自动摘要历史记忆
 
-        answer = self._filter_blocked_words(answer)
+        answer = self._filter_blocked_words(answer)  # 对最终答案做一次屏蔽词过滤
 
-        return ChatResponse(data=ChatData(answer=answer, retrieve_knowledge=sources, rag_used=rag_used))
+        return ChatResponse(data=ChatData(answer=answer, retrieve_knowledge=sources, rag_used=rag_used))  # 返回非流式响应
 
     def send_message_stream(self, payload: ChatRequest, client_ip: str | None = None) -> Generator[str, None, None]:
         """
@@ -164,23 +164,23 @@ class ChatService:
         display_question = self._display_question(payload)
         image_context = ImageUnderstandingService.analyze(payload.image_data, payload.image_mime)
         logger.info("chat image context ready user_id=%s character_id=%s context_len=%d", payload.user_id, payload.character_id, len(image_context))
-        conv_id = payload.conversation_id
-        if conv_id:
-            conv = self.conversation_repository.get_by_id(conv_id)
-            if not conv or conv.user_id != payload.user_id:
+        conv_id = payload.conversation_id  # 读取会话 ID
+        if conv_id:  # 如果已有会话
+            conv = self.conversation_repository.get_by_id(conv_id)  # 查询会话
+            if not conv or conv.user_id != payload.user_id:  # 校验会话归属
                 raise HTTPException(status_code=404, detail="Conversation not found")
         else:
-            conv = self.conversation_repository.create_conversation(
+            conv = self.conversation_repository.create_conversation(  # 自动创建新会话
                 payload.user_id, payload.character_id, title=display_question[:18] or "新对话"
             )
-            conv_id = conv.id
+            conv_id = conv.id  # 保存会话 ID
 
-        yield f"data: {json.dumps({'conversation_id': conv_id}, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({'conversation_id': conv_id}, ensure_ascii=False)}\n\n"  # 先把会话 ID 推给前端
 
-        if self._contains_blocked_word(payload.question):
-            refusal = "抱歉，我无法回答这个问题。"
+        if self._contains_blocked_word(payload.question):  # 如果用户问题命中屏蔽词
+            refusal = "抱歉，我无法回答这个问题。"  # 固定拒答文本
             yield f"data: {json.dumps({'chunk': refusal}, ensure_ascii=False)}\n\n"
-            try:
+            try:  # 尝试保存拒答消息
                 self.conversation_repository.add_message(conv_id, display_question, refusal, sources=[])
                 self.conversation_repository.update_conversation(conv_id, title=conv.title or display_question[:18], preview=display_question[:120])
             except Exception as exc:
@@ -199,45 +199,36 @@ class ChatService:
             memory = ""
         retrieval_query = self.llm_service.rewrite_query(payload.question, memory) if settings.query_rewrite_enabled else payload.question
         logger.info("rewrite_query done: %s", retrieval_query[:80])
-        if getattr(payload, 'force_no_rag', False):
-            context, sources = "", []
+        if getattr(payload, 'force_no_rag', False):  # 如果前端强制关闭 RAG
+            context, sources = "", []  # 跳过检索
         else:
-            # 并行执行检索 + 等待动画：检索可能涉及 Embedding、Milvus、Rerank 等多个耗时步骤。
-            # 这里不让前端“空白等待”，而是在后台检索的同时输出提示文字；检索完成则立刻停止提示。
-            # 相比同步阻塞等待，这种方式能降低用户感知延迟，也能证明后端仍在正常工作。
-            with ThreadPoolExecutor(max_workers=1) as executor:
-                retrieve_future = executor.submit(self._retrieve_context, payload.character_id, retrieval_query)
-                wait_text = "正在进行检索，请稍等……"
-                for ch in wait_text:
-                    if retrieve_future.done():
-                        break
-                    yield f"data: {json.dumps({'chunk': ch}, ensure_ascii=False)}\n\n"
-                    time.sleep(0.2)
-                try:
-                    context, sources = retrieve_future.result()
-                except Exception as e:
-                    logger.error("retrieve error: %s", e, exc_info=True)
-                    context, sources = "", []
+            try:
+                context, sources = self._retrieve_context(payload.character_id, retrieval_query)
+            except Exception as e:
+                logger.error("retrieve error: %s", e, exc_info=True)
+                context, sources = "", []
         rag_used = bool(context.strip())
         logger.info("RAG done: rag_used=%s, sources=%d, context_len=%d", rag_used, len(sources), len(context))
         # 清空之前的等待提示文字，开始正式回复。
         # 前端收到 replace="" 后会把“正在检索”的占位内容移除，避免提示语和正式答案混在一起。
         yield f"data: {json.dumps({'replace': ''}, ensure_ascii=False)}\n\n"
-        realtime_ctx = ContextService.get_realtime_context(client_ip, payload.latitude, payload.longitude)
+        realtime_ctx = ContextService.get_realtime_context(client_ip, payload.latitude, payload.longitude)  # 获取实时环境上下文
         yield f"data: {json.dumps({'rag_used': rag_used}, ensure_ascii=False)}\n\n"
-        full_answer_parts: list[str] = []
-        blocked = False
-        chunk_count = 0
+        full_answer_parts: list[str] = []  # 累积流式输出的所有文本块
+        blocked = False  # 标记生成内容是否命中屏蔽词
+        chunk_count = 0  # 统计模型输出 chunk 数量
 
-        try:
-            llm_question = self._question_with_image_context(payload.question, image_context)
+        try:  # LLM 流式调用可能因网络/API 异常中断
+            llm_question = self._question_with_image_context(payload.question, image_context)  # 拼接图片上下文
             for chunk in self.llm_service.generate_stream(character=character, question=llm_question, context=context, memory=memory, realtime_context=realtime_ctx):
-                chunk_count += 1
-                full_answer_parts.append(chunk)
-                current_text = "".join(full_answer_parts)
-                if not blocked and self._contains_blocked_word(current_text):
-                    blocked = True
-                if not blocked:
+                if chunk_count == 0:
+                    yield f"data: {json.dumps({'answer_start': True}, ensure_ascii=False)}\n\n"
+                chunk_count += 1  # 累加 chunk 数
+                full_answer_parts.append(chunk)  # 保存 chunk，便于最终入库
+                current_text = "".join(full_answer_parts)  # 拼接当前完整回答，用于屏蔽词检测
+                if not blocked and self._contains_blocked_word(current_text):  # 如果生成内容首次命中屏蔽词
+                    blocked = True  # 标记为需要整体替换拒答
+                if not blocked:  # 未命中屏蔽词时才把 chunk 推给前端
                     yield f"data: {json.dumps({'chunk': chunk}, ensure_ascii=False)}\n\n"
         except Exception as e:
             import traceback
@@ -245,14 +236,14 @@ class ChatService:
             traceback.print_exc()
             yield f"data: {json.dumps({'error': f'生成中断: {type(e).__name__}'}, ensure_ascii=False)}\n\n"
 
-        full_answer = "".join(full_answer_parts)
+        full_answer = "".join(full_answer_parts)  # 拼接完整答案，后续保存数据库
         logger.info("LLM done: %d chunks, answer_len=%d", chunk_count, len(full_answer))
 
-        if blocked:
-            refusal = "抱歉，我无法回答这个问题。"
+        if blocked:  # 如果生成过程中命中屏蔽词
+            refusal = "抱歉，我无法回答这个问题。"  # 替换为拒答
             yield f"data: {json.dumps({'replace': refusal}, ensure_ascii=False)}\n\n"
-            full_answer = refusal
-            sources = []
+            full_answer = refusal  # 数据库中也保存拒答文本
+            sources = []  # 拒答时不展示引用来源
 
         try:
             self.conversation_repository.add_message(conv_id, display_question, full_answer, rag_used=rag_used, sources=sources)
@@ -267,9 +258,11 @@ class ChatService:
         except Exception as exc:
             logger.error("append memory failed user_id=%s character_id=%s conversation_id=%s: %s", payload.user_id, payload.character_id, conv_id, exc, exc_info=True)
 
-        self._maybe_summarize(payload.user_id, payload.character_id, conv_id)
+        self._maybe_summarize(payload.user_id, payload.character_id, conv_id)  # 必要时自动摘要
 
-        if sources:
+        if full_answer:
+            yield f"data: {json.dumps({'final_answer': full_answer}, ensure_ascii=False)}\n\n"
+        if sources:  # 如果存在检索来源
             yield f"data: {json.dumps({'sources': sources}, ensure_ascii=False)}\n\n"
         yield "data: [DONE]\n\n"
 
@@ -444,15 +437,31 @@ class ChatService:
                     text = row.get("text", "")
                     context_parts.append(f"[{i}] {text}")
                 context_text = "\n\n".join(context_parts)
-                sources = [
-                    {
-                        "source_file": str(row.get("source_file", "")),
+                # 查询 knowledge 表，把 source_file（MD5 hash）映射回原始中文文件名
+                from app.db.session import SessionLocal
+                from app.db.models import KnowledgeDocument
+                hash_to_name: dict[str, str] = {}
+                try:
+                    with SessionLocal() as db:
+                        docs = db.query(KnowledgeDocument).filter(
+                            KnowledgeDocument.character_id == character_id
+                        ).all()
+                        for doc in docs:
+                            basename = os.path.basename(doc.stored_path)
+                            hash_to_name[basename] = doc.original_filename
+                except Exception:
+                    pass  # 查询失败时不影响正常流程，回退到显示 hash
+
+                sources = []
+                for row in rows:
+                    src = str(row.get("source_file", ""))
+                    display_name = hash_to_name.get(src, src)
+                    sources.append({
+                        "source_file": display_name,
                         "chunk_index": int(row.get("chunk_index", 0)),
                         "score": round(float(row.get("hybrid_score", row.get("score", 0.0))), 4),
                         "text": str(row.get("text", "")),
-                    }
-                    for row in rows
-                ]
+                    })
                 # Graph RAG 增强：如果该角色有知识图谱，追加图检索结果
                 graph_ctx = self.graph_service.graph_context(character_id, question)
                 if graph_ctx:

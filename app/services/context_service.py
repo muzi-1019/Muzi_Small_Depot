@@ -334,49 +334,59 @@ class ContextService:
         """通过国内天气 API 获取天气并写入缓存"""
         district = geo.get("district", "").replace("区", "").replace("县", "")
         city = geo.get("city", "")
-        # 先用区县名查城市代码，再用城市名兜底
-        city_code = ContextService._get_weather_code(district) or ContextService._get_weather_code(city)
-        if not city_code:
+        # 先准备区县级代码，再准备城市级代码；区县接口失败时继续尝试城市级代码
+        code_candidates = []
+        district_code = ContextService._get_weather_code(district)
+        city_code = ContextService._get_weather_code(city)
+        if district_code:
+            code_candidates.append((district or city, district_code))
+        if city_code and city_code != district_code:
+            code_candidates.append((city, city_code))
+        if not code_candidates:
             logger.warning("未找到天气代码: district=%s city=%s", district, city)
             return
         cache_key = f"weather_{district or city}"
-        try:
-            url = f"http://t.weather.itboy.net/api/weather/city/{city_code}"
-            with httpx.Client(timeout=8.0, trust_env=False) as client:
-                resp = client.get(url)
-                resp.raise_for_status()
-                data = resp.json()
-            if data.get("status") != 200:
-                logger.warning("天气 API 返回异常: %s", data.get("message", ""))
-                return
-            wd = data.get("data", {})
-            forecast = wd.get("forecast", [{}])[0]
-            parts = []
-            weather_type = forecast.get("type", "")
-            if weather_type:
-                parts.append(weather_type)
-            wendu = wd.get("wendu")
-            if wendu:
-                parts.append(f"气温{wendu}°C")
-            high = forecast.get("high", "").replace("高温 ", "")
-            low = forecast.get("low", "").replace("低温 ", "")
-            if high and low:
-                parts.append(f"{low}~{high}")
-            ganmao = forecast.get("fl", "")
-            fx = forecast.get("fx", "")
-            if fx and ganmao:
-                parts.append(f"{fx}{ganmao}")
-            shidu = wd.get("shidu", "")
-            if shidu:
-                parts.append(f"湿度{shidu}")
-            quality = wd.get("quality", "")
-            if quality:
-                parts.append(f"空气{quality}")
-            text = "，".join(parts)
-            if text:
-                _cache_set(cache_key, {"text": text})
-        except Exception as e:
-            logger.warning("获取天气信息失败: %s", e)
+        for place_name, code in code_candidates:
+            try:
+                url = f"http://t.weather.itboy.net/api/weather/city/{code}"
+                with httpx.Client(timeout=8.0, trust_env=False) as client:
+                    resp = client.get(url)
+                    resp.raise_for_status()
+                    data = resp.json()
+                if data.get("status") != 200:
+                    logger.warning("天气 API 返回异常: place=%s code=%s message=%s", place_name, code, data.get("message", ""))
+                    continue
+                wd = data.get("data", {})
+                forecast = wd.get("forecast", [{}])[0]
+                parts = []
+                weather_type = forecast.get("type", "")
+                if weather_type:
+                    parts.append(weather_type)
+                wendu = wd.get("wendu")
+                if wendu:
+                    parts.append(f"气温{wendu}°C")
+                high = forecast.get("high", "").replace("高温 ", "")
+                low = forecast.get("low", "").replace("低温 ", "")
+                if high and low:
+                    parts.append(f"{low}~{high}")
+                ganmao = forecast.get("fl", "")
+                fx = forecast.get("fx", "")
+                if fx and ganmao:
+                    parts.append(f"{fx}{ganmao}")
+                shidu = wd.get("shidu", "")
+                if shidu:
+                    parts.append(f"湿度{shidu}")
+                quality = wd.get("quality", "")
+                if quality:
+                    parts.append(f"空气{quality}")
+                text = "，".join(parts)
+                if text:
+                    _cache_set(cache_key, {"text": text})
+                    return
+            except Exception as e:
+                logger.warning("获取天气信息失败: place=%s code=%s error=%s", place_name, code, e)
+        logger.warning("天气信息获取失败，已尝试区县和城市兜底: district=%s city=%s", district, city)
+        return
 
     @staticmethod
     def _get_weather_code(name: str) -> str | None:
