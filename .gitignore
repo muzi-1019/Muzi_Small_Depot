@@ -1,13 +1,39 @@
-﻿node_modules/
-.env
+﻿# Models
+models/
+model/
+*.pt
+*.pth
+*.bin
+*.safetensors
+
+# Temp files
+~$*
+*.tmp
+
+# IDE
+.vscode/
+.idea/
+
+# Python
 __pycache__/
 *.pyc
+.pytest_cache/
 .venv/
-uploads/
-*.log
+venv/
+
+# Node
+node_modules/
 frontend/node_modules/
-frontend/.vite/
-.idea/
-check_*.py
-extract_exact.py
-exact_old.txt
+
+# Build
+dist/
+build/
+*.egg-info/
+
+# Logs
+*.log
+eval_run_log.txt
+
+# Environment
+.env
+
