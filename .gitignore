@@ -5,6 +5,12 @@ model/
 *.pth
 *.bin
 *.safetensors
+*.onnx
+
+# Uploads & Data
+uploads/
+data/*.pdf
+data/**/*.pdf
 
 # Temp files
 ~$*
